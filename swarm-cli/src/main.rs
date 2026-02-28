@@ -1,4 +1,5 @@
 mod github_backend;
+mod net_cap;
 
 use anyhow::{Result, anyhow};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
@@ -97,6 +98,12 @@ enum RunCmd {
         #[arg(long, value_enum, default_value_t = RouteModeArg::Direct)]
         route_mode: RouteModeArg,
         #[arg(long)]
+        net_cap_ticket: Option<PathBuf>,
+        #[arg(long)]
+        allow_direct_fallback: bool,
+        #[arg(long, default_value = "http://example.com/")]
+        net_probe_url: String,
+        #[arg(long)]
         workflow_ref: Option<String>,
         #[arg(long)]
         allow_cold_start: bool,
@@ -118,6 +125,14 @@ enum RunCmd {
         run_id: Option<String>,
         #[arg(long, value_enum)]
         backend: BackendArg,
+        #[arg(long, value_enum, default_value_t = RouteModeArg::Direct)]
+        route_mode: RouteModeArg,
+        #[arg(long)]
+        net_cap_ticket: Option<PathBuf>,
+        #[arg(long)]
+        allow_direct_fallback: bool,
+        #[arg(long, default_value = "http://example.com/")]
+        net_probe_url: String,
         #[arg(long)]
         workflow_ref: Option<String>,
         #[arg(long)]
@@ -216,6 +231,12 @@ enum GithubBackendCmd {
         workflow_ref: String,
         #[arg(long, value_enum, default_value_t = RouteModeArg::Direct)]
         route_mode: RouteModeArg,
+        #[arg(long)]
+        net_cap_ticket: Option<PathBuf>,
+        #[arg(long)]
+        allow_direct_fallback: bool,
+        #[arg(long, default_value = "http://example.com/")]
+        net_probe_url: String,
         #[arg(long)]
         allow_cold_start: bool,
         #[arg(long, default_value = DEFAULT_AGENT_IMAGE)]
@@ -388,6 +409,9 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 run_id,
                 backend,
                 route_mode,
+                net_cap_ticket,
+                allow_direct_fallback,
+                net_probe_url,
                 workflow_ref,
                 allow_cold_start,
                 agent_image,
@@ -397,13 +421,20 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 timeout_secs,
             } => {
                 let backend_core = to_backend(backend);
+                let route_mode_core = to_route_mode(route_mode);
+                let net_cap = net_cap::evaluate_route_policy(
+                    &route_mode_core,
+                    net_cap_ticket.as_deref(),
+                    allow_direct_fallback,
+                    &net_probe_url,
+                )?;
                 let workflow_ref =
                     workflow_ref.or_else(|| load_config().ok().and_then(|c| c.workflow_ref));
                 let spec = RunSpec {
                     run_id: run_id.unwrap_or_else(|| format!("run-{}", sanitize(&node))),
                     node,
                     backend: backend_core.clone(),
-                    route_mode: to_route_mode(route_mode),
+                    route_mode: route_mode_core,
                     workflow_ref,
                 };
 
@@ -411,7 +442,7 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     let artifacts = local_engine()?.launch(&spec, allow_cold_start)?;
                     return Ok(success(
                         "local launch completed",
-                        serde_json::to_value(artifacts)?,
+                        json!({ "artifacts": artifacts, "net_cap": net_cap }),
                     ));
                 }
 
@@ -428,19 +459,27 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     )?;
                     return Ok(success(
                         "github launch dispatch prepared",
-                        serde_json::to_value(dispatched)?,
+                        json!({ "dispatch": dispatched, "net_cap": net_cap }),
                     ));
                 }
 
                 Ok(success(
                     "gitlab launch scaffold",
-                    json!({ "run_spec": spec, "note": "GitLab execution lands in M5" }),
+                    json!({
+                        "run_spec": spec,
+                        "net_cap": net_cap,
+                        "note": "GitLab execution lands in M5"
+                    }),
                 ))
             }
             RunCmd::Resume {
                 node,
                 run_id,
                 backend,
+                route_mode,
+                net_cap_ticket,
+                allow_direct_fallback,
+                net_probe_url,
                 workflow_ref,
                 allow_cold_start,
                 agent_image,
@@ -450,13 +489,20 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 timeout_secs,
             } => {
                 let backend_core = to_backend(backend);
+                let route_mode_core = to_route_mode(route_mode);
+                let net_cap = net_cap::evaluate_route_policy(
+                    &route_mode_core,
+                    net_cap_ticket.as_deref(),
+                    allow_direct_fallback,
+                    &net_probe_url,
+                )?;
                 let workflow_ref =
                     workflow_ref.or_else(|| load_config().ok().and_then(|c| c.workflow_ref));
                 let spec = RunSpec {
                     run_id: run_id.unwrap_or_else(|| format!("resume-{}", sanitize(&node))),
                     node,
                     backend: backend_core.clone(),
-                    route_mode: RouteMode::Direct,
+                    route_mode: route_mode_core,
                     workflow_ref,
                 };
 
@@ -464,7 +510,7 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     let artifacts = local_engine()?.resume(&spec, allow_cold_start)?;
                     return Ok(success(
                         "local resume completed",
-                        serde_json::to_value(artifacts)?,
+                        json!({ "artifacts": artifacts, "net_cap": net_cap }),
                     ));
                 }
 
@@ -481,13 +527,17 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     )?;
                     return Ok(success(
                         "github resume dispatch prepared",
-                        serde_json::to_value(dispatched)?,
+                        json!({ "dispatch": dispatched, "net_cap": net_cap }),
                     ));
                 }
 
                 Ok(success(
                     "gitlab resume scaffold",
-                    json!({ "run_spec": spec, "note": "GitLab execution lands in M5" }),
+                    json!({
+                        "run_spec": spec,
+                        "net_cap": net_cap,
+                        "note": "GitLab execution lands in M5"
+                    }),
                 ))
             }
             RunCmd::Fork { node, label } => {
@@ -582,6 +632,9 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     run_id,
                     workflow_ref,
                     route_mode,
+                    net_cap_ticket,
+                    allow_direct_fallback,
+                    net_probe_url,
                     allow_cold_start,
                     agent_image,
                     agent_step,
@@ -589,11 +642,18 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     max_attempts,
                     timeout_secs,
                 } => {
+                    let route_mode_core = to_route_mode(route_mode);
+                    let net_cap = net_cap::evaluate_route_policy(
+                        &route_mode_core,
+                        net_cap_ticket.as_deref(),
+                        allow_direct_fallback,
+                        &net_probe_url,
+                    )?;
                     let spec = RunSpec {
                         run_id,
                         node: "root".to_string(),
                         backend: Backend::Github,
-                        route_mode: to_route_mode(route_mode),
+                        route_mode: route_mode_core,
                         workflow_ref: Some(workflow_ref),
                     };
                     let dispatched = github_backend::dispatch_run_with_policy(
@@ -607,7 +667,7 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     )?;
                     Ok(success(
                         "github dispatch handled",
-                        serde_json::to_value(dispatched)?,
+                        json!({ "dispatch": dispatched, "net_cap": net_cap }),
                     ))
                 }
                 GithubBackendCmd::Collect {
@@ -783,6 +843,8 @@ fn classify_exit_code(err: &anyhow::Error) -> i32 {
     let msg = err.to_string();
     if msg.starts_with("VERIFY_CERT_FAILED:") {
         EXIT_VERIFICATION_FAILED
+    } else if msg.starts_with("NET_CAP_POLICY_VIOLATION:") {
+        EXIT_POLICY_VIOLATION
     } else if msg.starts_with("SCHEMA_VALIDATE_FAILED:") || msg.contains("unsupported key") {
         EXIT_INVALID_INPUT
     } else {
@@ -890,5 +952,11 @@ mod tests {
         let err = execute(cli).expect_err("invalid schema should be an error");
         assert!(err.to_string().starts_with("SCHEMA_VALIDATE_FAILED:"));
         assert_eq!(classify_exit_code(&err), EXIT_INVALID_INPUT);
+    }
+
+    #[test]
+    fn net_cap_policy_violation_maps_to_policy_exit_code() {
+        let err = anyhow!("NET_CAP_POLICY_VIOLATION: route policy mismatch");
+        assert_eq!(classify_exit_code(&err), EXIT_POLICY_VIOLATION);
     }
 }
