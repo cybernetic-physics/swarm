@@ -1,6 +1,6 @@
 # Roadmap (M0-M5)
 
-Status: draft
+Status: active (M0-M3 implemented; M4-M5 pending)
 Date: 2026-02-28
 
 ## M0: contract freeze
@@ -78,8 +78,8 @@ Done-when:
 
 ## Immediate next implementation order
 
-1. M0 schema + verifier freeze.
-2. M1 local engine and deterministic bundle loop.
-3. M2 GitHub backend with fallback semantics.
-4. M3 proxy `net_cap` mode.
-5. M2b hardening pass.
+1. Add deterministic conformance tests for repeated run artifacts.
+2. Add storage adapter abstraction and S3 manifest-integrity path.
+3. Tighten security hardening (secret redaction and token-rotation atomicity tests).
+4. Add optional policy-capsule hash branch (M4).
+5. Add GitLab backend parity scaffolding (M5).

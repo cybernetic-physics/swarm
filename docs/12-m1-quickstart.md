@@ -100,5 +100,5 @@ cargo run -p swarm-cli -- verify cert \
 ## Notes
 
 - Current implementation is M1 local backend scope only.
-- GitHub execution backend is still M2 work.
+- GitHub execution backend is implemented separately; see `docs/13-m2-github-quickstart.md`.
 - Raw tokens are currently emitted in some local outputs for development; do not treat this as production-safe secret handling.

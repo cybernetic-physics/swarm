@@ -50,8 +50,9 @@ swarm
 
   verify cert
     --certificate <path>
-    --attestation <path-or-ref>
+    --expected-artifact-hash <sha256:...>
     --required-commit <sha>
+    --attestation <path-or-ref>
 
   verify proof
     --proof <path>
@@ -63,7 +64,8 @@ swarm
   backend local execute
 
   schema validate
-    --file <node|certificate|result>
+    --schema <node|certificate|result|next_tokens>
+    --file <path>
 
   plan show
 ```
@@ -87,28 +89,14 @@ swarm
 
 ## Config model
 
-Default path: `~/.swarm/config.toml`
+Default path: `~/.swarm/config.json`
 
-```toml
-[identity]
-operator_id = "did:key:..."
-default_buyer_address = ""
-
-[storage]
-default_backend = "s3"
-s3_bucket = ""
-s3_region = "us-east-1"
-
-[backends]
-default_execution = "github"
-workflow_ref = "owner/repo/.github/workflows/loom-paid-run.yml@<sha>"
-
-[network]
-default_route_mode = "direct"
-require_fail_closed_for_client_exit = true
-
-[output]
-default_format = "human"
+```json
+{
+  "default_backend": "github",
+  "workflow_ref": "owner/repo/.github/workflows/loom-paid-run.yml@<sha>",
+  "default_route_mode": "direct"
+}
 ```
 
 ## Output contract

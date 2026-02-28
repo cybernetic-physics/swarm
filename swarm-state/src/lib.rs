@@ -1,5 +1,4 @@
 use anyhow::{Context, Result, anyhow, bail};
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chacha20poly1305::{
     ChaCha20Poly1305, Key, Nonce,
     aead::{Aead, KeyInit},
@@ -12,7 +11,10 @@ use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
-use swarm_core::{Backend, RestoreMode, RouteMode, RunOutcome, RunSpec, RunStatus};
+use swarm_core::{
+    Backend, CapabilityEnvelope, CapabilityKind, RestoreMode, RouteMode, RunOutcome, RunSpec,
+    RunStatus, chain_key_ref,
+};
 use tar::{Builder, Header};
 use tempfile::NamedTempFile;
 
@@ -152,14 +154,7 @@ struct StateSnapshotMeta {
     plaintext_size_bytes: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CapabilityToken {
-    version: u8,
-    kind: String,
-    state_id: String,
-    ratchet_step: u64,
-    chain_key: String,
-}
+type CapabilityToken = CapabilityEnvelope;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct BundleManifest {
@@ -188,20 +183,6 @@ impl OperationKind {
             Self::Launch => "launch",
             Self::Resume => "resume",
         }
-    }
-}
-
-impl CapabilityToken {
-    fn encode(&self) -> Result<String> {
-        let bytes = serde_json::to_vec(self)?;
-        Ok(URL_SAFE_NO_PAD.encode(bytes))
-    }
-
-    fn decode(encoded: &str) -> Result<Self> {
-        let bytes = URL_SAFE_NO_PAD
-            .decode(encoded)
-            .map_err(|e| anyhow!("invalid token encoding: {e}"))?;
-        Ok(serde_json::from_slice(&bytes)?)
     }
 }
 
@@ -281,7 +262,7 @@ impl LocalEngine {
                 token: NetworkTokenBlock {
                     token_ref: format!(
                         "secret://net_cap/{}",
-                        short_token_ref(&next_net_cap.chain_key)
+                        chain_key_ref(&next_net_cap.chain_key)
                     ),
                     ratchet_step: next_net_cap.ratchet_step,
                     expires_at: None,
@@ -437,7 +418,7 @@ impl LocalEngine {
                 token: NetworkTokenBlock {
                     token_ref: format!(
                         "secret://net_cap/{}",
-                        short_token_ref(&next_net_cap.chain_key)
+                        chain_key_ref(&next_net_cap.chain_key)
                     ),
                     ratchet_step: next_net_cap.ratchet_step,
                     expires_at: None,
@@ -494,14 +475,14 @@ impl LocalEngine {
 
         let root_state_cap = CapabilityToken {
             version: 1,
-            kind: "state_cap".to_string(),
+            kind: CapabilityKind::StateCap,
             state_id: root_state_id.clone(),
             ratchet_step: 0,
             chain_key: sha256_hex(b"root-state-chain-key"),
         };
         let root_net_cap = CapabilityToken {
             version: 1,
-            kind: "net_cap".to_string(),
+            kind: CapabilityKind::NetCap,
             state_id: root_state_id.clone(),
             ratchet_step: 0,
             chain_key: sha256_hex(b"root-net-chain-key"),
@@ -547,7 +528,7 @@ impl LocalEngine {
                 token: NetworkTokenBlock {
                     token_ref: format!(
                         "secret://net_cap/{}",
-                        short_token_ref(&root_net_cap.chain_key)
+                        chain_key_ref(&root_net_cap.chain_key)
                     ),
                     ratchet_step: 0,
                     expires_at: None,
@@ -1014,10 +995,6 @@ fn write_deterministic_tar(path: &Path, mut files: Vec<(&str, Vec<u8>)>) -> Resu
 
 fn state_id_from_plaintext(plain: &[u8]) -> String {
     format!("state-{}", sha256_hex(plain))
-}
-
-fn short_token_ref(chain_key: &str) -> String {
-    chain_key.chars().take(12).collect()
 }
 
 fn prefixed_sha256(bytes: &[u8]) -> String {

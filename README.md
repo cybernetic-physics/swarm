@@ -1,6 +1,6 @@
 # swarm
 
-Status: planning + M1 local backend + M2 GitHub adapter + M2b hardening + M3 proxy smoke harness
+Status: M0 schema/verifier freeze + M1 local backend + M2 GitHub adapter + M2b hardening + M3 fail-closed net_cap
 Last updated: 2026-02-28
 
 `swarm` is the new CLI-first project under `/Users/cuboniks/Projects/agent_swarm/swarm`.
@@ -34,13 +34,16 @@ Implemented now:
   - artifact schema guards for `result.json` and `next_tokens.json`,
   - machine-readable GitHub backend error taxonomy + stable exit code mapping,
   - expanded `doctor` diagnostics for GitHub CLI/auth/workflow pin validity.
-- M3 preflight proxy smoke harness:
+- M3 proxy-first fail-closed `net_cap` path:
   - standalone broker/provider/ticket module in `swarm-proxy`,
+  - CLI-integrated route-policy preflight with fail-closed enforcement,
   - GitHub Actions end-to-end smoke workflow proving proxy handshake and payload forwarding.
+- Capability envelope parser/serializer:
+  - shared `state_cap`/`net_cap` envelope encode/decode and validation in `swarm-core`,
+  - redacted capability summaries for log-safe CLI output paths.
 
 Not implemented yet:
 - run-id to GH run correlation automation after dispatch.
-- Full M3 integration into `swarm-cli` `net_cap` policy workflows (currently standalone `swarm-proxy` + smoke test).
 - M5 GitLab parity backend.
 
 ## Doc map
@@ -65,7 +68,7 @@ Not implemented yet:
 Phase 0/1 only:
 - GitHub backend path.
 - Off-chain verifier flow.
-- Proxy-first `net_cap` (target for M3).
+- Proxy-first `net_cap` with fail-closed policy.
 - Deterministic `certificate.json` + encrypted bundle outputs.
 - Cold-start fallback required when checkpoint restore fails.
 

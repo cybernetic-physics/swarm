@@ -7,17 +7,17 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 
 ## P0 (must complete before beta)
 
-- [ ] Freeze schema contracts (`node`, `certificate`, `result`, `next_tokens`).
+- [x] Freeze schema contracts (`node`, `certificate`, `result`, `next_tokens`).
 - [x] Implement verifier minimum checks and fixture suite.
 - [x] Create `swarm-core`, `swarm-state`, `swarm-verify`, `swarm-cli` crates.
 - [x] Implement local backend with deterministic bundle pipeline.
-- [ ] Implement capability envelope parser/serializer with redaction-safe logging.
+- [x] Implement capability envelope parser/serializer with redaction-safe logging.
 - [x] Implement GitHub dispatch/collect adapter with pinned workflow enforcement.
 - [x] Implement restore compatibility checks and cold-start fallback branch.
 
 ## P1 (required for robust MVP)
 
-- [ ] Add proxy-first `net_cap` mode with fail-closed policy path.
+- [x] Add proxy-first `net_cap` mode with fail-closed policy path.
 - [x] Add timeout/retry/cancel policy to backend adapters.
 - [x] Add machine-readable error taxonomy and stable exit codes.
 - [ ] Add conformance tests for deterministic artifacts across repeated runs.

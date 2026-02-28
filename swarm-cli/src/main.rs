@@ -8,7 +8,10 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use swarm_core::{Backend, RouteMode, RunSpec, validate_schema_kind, validate_schema_value};
+use swarm_core::{
+    Backend, CapabilityEnvelope, RouteMode, RunSpec, redact_capability_token, validate_schema_kind,
+    validate_schema_value,
+};
 use swarm_state::LocalEngine;
 use swarm_verify::{verify_certificate_file, verify_proof_file};
 
@@ -591,10 +594,17 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     serde_json::to_value(inspection)?,
                 ))
             }
-            StateCmd::Fork { state_cap } => Ok(success(
-                "state fork by raw token is not implemented yet",
-                json!({ "state_cap_ref": redact_secret(&state_cap) }),
-            )),
+            StateCmd::Fork { state_cap } => {
+                let capability = CapabilityEnvelope::decode(&state_cap)
+                    .map_err(|err| anyhow!("INVALID_STATE_CAP: {err}"))?;
+                Ok(success(
+                    "state fork by raw token is not implemented yet",
+                    json!({
+                        "state_cap": capability.redacted(),
+                        "state_cap_ref": redact_capability_token(&state_cap)
+                    }),
+                ))
+            }
         },
         Commands::Verify { command } => match command {
             VerifyCmd::Cert {
@@ -863,7 +873,10 @@ fn classify_exit_code(err: &anyhow::Error) -> i32 {
         EXIT_VERIFICATION_FAILED
     } else if msg.starts_with("NET_CAP_POLICY_VIOLATION:") {
         EXIT_POLICY_VIOLATION
-    } else if msg.starts_with("SCHEMA_VALIDATE_FAILED:") || msg.contains("unsupported key") {
+    } else if msg.starts_with("SCHEMA_VALIDATE_FAILED:")
+        || msg.starts_with("INVALID_STATE_CAP:")
+        || msg.contains("unsupported key")
+    {
         EXIT_INVALID_INPUT
     } else {
         1
@@ -910,14 +923,6 @@ fn sanitize(input: &str) -> String {
             }
         })
         .collect::<String>()
-}
-
-fn redact_secret(s: &str) -> String {
-    if s.len() <= 8 {
-        "********".to_string()
-    } else {
-        format!("{}...{}", &s[0..4], &s[s.len() - 4..])
-    }
 }
 
 fn to_backend(value: BackendArg) -> Backend {
@@ -983,6 +988,23 @@ mod tests {
     fn verify_proof_failure_maps_to_verification_exit_code() {
         let err = anyhow!("VERIFY_PROOF_FAILED: invalid proof");
         assert_eq!(classify_exit_code(&err), EXIT_VERIFICATION_FAILED);
+    }
+
+    #[test]
+    fn invalid_state_cap_maps_to_invalid_input_exit_code() {
+        let cli = Cli {
+            json: true,
+            quiet: false,
+            verbose: 0,
+            command: Commands::State {
+                command: StateCmd::Fork {
+                    state_cap: "not-a-capability-token".to_string(),
+                },
+            },
+        };
+        let err = execute(cli).expect_err("invalid state_cap should fail");
+        assert!(err.to_string().starts_with("INVALID_STATE_CAP:"));
+        assert_eq!(classify_exit_code(&err), EXIT_INVALID_INPUT);
     }
 
     #[test]

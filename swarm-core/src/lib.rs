@@ -1,5 +1,10 @@
+pub mod capability;
 pub mod models;
 
+pub use capability::{
+    CapabilityEnvelope, CapabilityEnvelopeRedacted, CapabilityKind, chain_key_ref,
+    redact_capability_token,
+};
 pub use models::{
     Backend, RestoreMode, RouteMode, RunOutcome, RunSpec, RunStatus, SchemaValidationResult,
 };
