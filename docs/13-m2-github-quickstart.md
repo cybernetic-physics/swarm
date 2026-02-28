@@ -5,6 +5,7 @@ Date: 2026-02-28
 
 For a tested live path (single GitHub runner) with concrete run IDs and findings, see:
 - `docs/15-live-github-e2e.md`
+- `docs/artifacts/2026-02-28-live-two-step-chain.json` (two-step encrypted chain evidence)
 
 This quickstart covers the implemented M2 GitHub adapter path:
 - pinned workflow ref parsing and enforcement,

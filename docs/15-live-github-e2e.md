@@ -47,6 +47,43 @@ Current storage mode (workflow `swarm-live-run.yml`):
   - `SWARM_NET_CAP_IN`
 - Intermediate chain-key files are kept in non-uploaded runtime workspace paths (not under artifact upload roots).
 
+## Two-step chain validation (2026-02-28)
+
+A live two-step chain was executed on commit:
+
+- `84d0540d5e095ec463f7961195ce8b290355d39f`
+
+Step 1:
+
+- `run_id`: `live-chain1-1772284401`
+- GitHub run: `22521431039`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22521431039`
+- Collect result: success, `result.json` + `next_tokens.json` present.
+- Produced checkpoint locator:
+  - `gh-artifact://22521431039/state-bundle-live-chain1-1772284401`
+
+Step 2 (chained inputs from step 1):
+
+- `run_id`: `live-chain2-1772284431`
+- GitHub run: `22521438644`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22521438644`
+- Dispatch used:
+  - `SWARM_CHECKPOINT_IN=<step1 result.json bundle_ref>`
+  - `SWARM_STATE_CAP_IN=<step1 next_tokens.json state_cap_next>`
+  - `SWARM_NET_CAP_IN=<step1 next_tokens.json net_cap_next>`
+- Collect result: success, `result.json` + `next_tokens.json` present.
+
+Validated outcomes:
+
+- `run1.bundle_ref` matched expected artifact locator for run `22521431039`.
+- `run2.bundle_ref` matched expected artifact locator for run `22521438644`.
+- `ratchet_step` incremented from `1` (step 1) to `2` (step 2).
+- End-to-end chain assertions all passed.
+
+Machine-readable test record:
+
+- `docs/artifacts/2026-02-28-live-two-step-chain.json`
+
 ## Preconditions
 
 - In repo root:

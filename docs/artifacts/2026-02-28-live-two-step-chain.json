@@ -1,0 +1,35 @@
+{
+  "date": "2026-02-28",
+  "executed_at_utc": "2026-02-28T13:14:39Z",
+  "commit": "84d0540d5e095ec463f7961195ce8b290355d39f",
+  "workflow_ref": "cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@84d0540d5e095ec463f7961195ce8b290355d39f",
+  "run1": {
+    "run_id": "live-chain1-1772284401",
+    "gh_run_id": 22521431039,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22521431039",
+    "bundle_ref": "gh-artifact://22521431039/state-bundle-live-chain1-1772284401",
+    "expected_bundle_ref": "gh-artifact://22521431039/state-bundle-live-chain1-1772284401",
+    "bundle_ref_matches_expected": true,
+    "state_id": "state-live-chain1-1772284401",
+    "ratchet_step": 1,
+    "state_cap_next_sha256": "bc095ef9f14b61a12c34c0476ac2f834edd74f3fead929f39f66a687bae7eb24",
+    "net_cap_next_sha256": "58b68362814ca934b0ba96022ef6b99223b561200ba71bb9e25e3e3c5a8c4eed"
+  },
+  "run2": {
+    "run_id": "live-chain2-1772284431",
+    "gh_run_id": 22521438644,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22521438644",
+    "bundle_ref": "gh-artifact://22521438644/state-bundle-live-chain2-1772284431",
+    "expected_bundle_ref": "gh-artifact://22521438644/state-bundle-live-chain2-1772284431",
+    "bundle_ref_matches_expected": true,
+    "state_id": "state-live-chain2-1772284431",
+    "ratchet_step": 2,
+    "state_cap_next_sha256": "51961b25a5c0956cab903fa1dc9c7c8cb441175b8f7626b0b3de08f004c9daa2",
+    "net_cap_next_sha256": "307076efa0831f1adc365b6a213fde1f9bdf60689ebcc632d4aca9c24f51ea81"
+  },
+  "assertions": {
+    "ratchet_incremented_by_one": true,
+    "chain_bundle_ref_used_for_step2": true,
+    "both_bundle_refs_match_run_artifacts": true
+  }
+}
