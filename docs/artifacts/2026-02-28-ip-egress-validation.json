@@ -1,0 +1,15 @@
+{
+  "timestamp_utc": "2026-02-28T12:04:04Z",
+  "host_public_ip_masked": "98.97.27.x",
+  "container_direct_public_ip_masked": "98.97.27.x",
+  "container_proxied_public_ip_masked": "98.97.27.x",
+  "host_public_ip_sha256_12": "f4fb99f282f2",
+  "container_direct_public_ip_sha256_12": "f4fb99f282f2",
+  "container_proxied_public_ip_sha256_12": "f4fb99f282f2",
+  "container_proxied_equals_host": true,
+  "container_direct_equals_host": true,
+  "proxy_wrong_token_http_status": "403",
+  "proxy_wrong_token_expected": "403",
+  "proxy_wrong_token_check_passed": true,
+  "notes": "Masked + hashed IP fields are recorded to avoid publishing full public IP in repository history."
+}

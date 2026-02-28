@@ -1,6 +1,6 @@
 # M3 preflight proxy experiment report
 
-Status: validated smoke baseline
+Status: validated smoke baseline + local container IP parity check
 Date: 2026-02-28
 
 ## What this means
@@ -20,6 +20,7 @@ Can `swarm-proxy` establish a usable reverse path for worker egress without TURN
 - Workflow file: `.github/workflows/proxy-smoke.yml`
 - Run 1: https://github.com/cybernetic-physics/swarm/actions/runs/22520237813
 - Run 2: https://github.com/cybernetic-physics/swarm/actions/runs/22520261305
+- Local IP parity artifact: `docs/artifacts/2026-02-28-ip-egress-validation.json`
 
 ## Network diagrams
 
@@ -89,12 +90,61 @@ Observed in both runs:
 - `End-to-end proxy smoke test`: success
 - `Upload logs on failure`: skipped (expected because no failure)
 
+## Final test: container egress IP parity with this machine
+
+Question:
+- Does a containerized worker request routed through `swarm-proxy` observe the same public egress IP as this machine?
+
+Method:
+1. Start local broker (`127.0.0.1:28788`) and provider (`swarm-proxy provider`).
+2. Resolve this machine public IP from `https://api.ipify.org`.
+3. From Docker container (`curlimages/curl:8.12.1`) query public IP directly.
+4. From the same container query public IP through proxy:
+
+```bash
+curl -fsS \
+  --proxy "http://host.docker.internal:28788" \
+  --proxy-user "<session_id>:<token>" \
+  https://api.ipify.org
+```
+
+5. Run negative control with wrong token and confirm broker rejects request (`403`).
+6. Persist masked/hash-only results to `docs/artifacts/2026-02-28-ip-egress-validation.json`.
+
+Local test network diagram:
+
+```mermaid
+graph LR
+  C[Docker container worker] -->|HTTP proxy request| B[Broker on host 127.0.0.1:28788]
+  B -->|OPEN/DATA via provider| P[Provider on same host]
+  P --> I[api.ipify.org]
+  H[Host machine] -->|direct IP probe| I
+```
+
+Recorded result (`2026-02-28T12:04:04Z`):
+
+| Check | Value |
+|---|---|
+| `host_public_ip_masked` | `98.97.27.x` |
+| `container_direct_public_ip_masked` | `98.97.27.x` |
+| `container_proxied_public_ip_masked` | `98.97.27.x` |
+| `container_proxied_equals_host` | `true` |
+| `container_direct_equals_host` | `true` |
+| `proxy_wrong_token_http_status` | `403` |
+| `proxy_wrong_token_check_passed` | `true` |
+
+Conclusion:
+- For this environment, the container's proxied egress IP matched this machine's public IP.
+- Because direct container egress was also equal here, this test confirms proxy operation and auth gating but does not by itself demonstrate IP translation relative to a remote runner network.
+
 ## What was proven
 
 - Broker/provider registration and auth token matching works for smoke-path traffic.
 - Control-plane `OPEN` handshake and data-channel attach (`DATA`) complete correctly.
 - HTTP forwarding path returns exact upstream payload through the tunnel.
 - This path works in GitHub-hosted CI (not just local dev shell).
+- Local Docker worker parity test shows proxied public IP equals host public IP in this environment.
+- Wrong proxy token is rejected with `403`, confirming auth is enforced on the proxy path.
 
 ## What was not proven
 
@@ -102,6 +152,7 @@ Observed in both runs:
 - No NAT-boundary, cross-host, or internet-path test was performed here.
 - `CONNECT`/HTTPS tunneling behavior was not explicitly asserted in this workflow.
 - No load/latency/soak behavior was measured.
+- The local IP parity result does not prove remote GitHub runner egress rewriting to host IP.
 
 ## TURN/STUN answer for this experiment
 
