@@ -2,3 +2,9 @@ target/
 .DS_Store
 
 .swarm/
+
+# Local smoke-test artifacts
+broker.log
+provider.log
+http.log
+proxied.txt
