@@ -262,6 +262,8 @@ Guaranteed by current code paths:
 - Mismatched ratchet keys fail encrypted checkpoint restore/decrypt operations.
 - Verifier can enforce certificate-hash equality + required commit match.
 - Verifier enforces policy hash equality when certificate includes policy metadata, with optional strict policy mode.
+- Certificate validation rejects unknown `critical_*` fields in certificate objects.
+- Certificate `replay` block (if present) is validated for `nonce` and `expires_at_unix > 0`.
 - GitHub workflow emits `artifact_hash` from actual `certificate.json` bytes.
 - GitHub collect path now fail-closes on certificate hash/commit/policy verification failures by default.
 
@@ -299,10 +301,10 @@ Workspace test run used for this trust-model snapshot:
 - Date: 2026-02-28
 - Result: pass
   - `swarm-cli`: 36 tests
-  - `swarm-core`: 9 tests
+  - `swarm-core`: 13 tests
   - `swarm-proxy`: 4 tests
   - `swarm-state`: 6 tests
-  - `swarm-verify`: 15 tests
+  - `swarm-verify`: 19 tests
 
 Notable regression tests covering trust boundaries:
 - `net_cap::tests::policy_mismatch_rejected_for_client_exit_non_proxy_ticket`

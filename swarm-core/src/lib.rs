@@ -260,6 +260,24 @@ fn validate_certificate(value: &Value) -> Vec<String> {
         return vec!["certificate must be a JSON object".to_string()];
     };
 
+    reject_unknown_critical_fields(
+        obj,
+        &[
+            "type",
+            "job_id",
+            "request_hash",
+            "mode",
+            "parent_state",
+            "result",
+            "runtime",
+            "timestamp",
+            "policy",
+            "replay",
+        ],
+        "certificate",
+        &mut errors,
+    );
+
     require_eq_str(obj.get("type"), "loom-agent-run-v1", "type", &mut errors);
     require_non_empty_string(obj.get("job_id"), "job_id", &mut errors);
     require_prefixed_hash(obj.get("request_hash"), "request_hash", &mut errors);
@@ -273,6 +291,12 @@ fn validate_certificate(value: &Value) -> Vec<String> {
 
     if let Some(parent_state) = require_object(obj.get("parent_state"), "parent_state", &mut errors)
     {
+        reject_unknown_critical_fields(
+            parent_state,
+            &["state_id", "bundle_sha256", "ratchet_step"],
+            "parent_state",
+            &mut errors,
+        );
         require_non_empty_string(
             parent_state.get("state_id"),
             "parent_state.state_id",
@@ -291,6 +315,12 @@ fn validate_certificate(value: &Value) -> Vec<String> {
     }
 
     if let Some(result) = require_object(obj.get("result"), "result", &mut errors) {
+        reject_unknown_critical_fields(
+            result,
+            &["response_sha256", "response_locator", "new_state"],
+            "result",
+            &mut errors,
+        );
         require_prefixed_hash(
             result.get("response_sha256"),
             "result.response_sha256",
@@ -304,6 +334,12 @@ fn validate_certificate(value: &Value) -> Vec<String> {
         if let Some(new_state) =
             require_object(result.get("new_state"), "result.new_state", &mut errors)
         {
+            reject_unknown_critical_fields(
+                new_state,
+                &["state_id", "bundle_sha256", "bundle_manifest_sha256"],
+                "result.new_state",
+                &mut errors,
+            );
             require_non_empty_string(
                 new_state.get("state_id"),
                 "result.new_state.state_id",
@@ -323,6 +359,12 @@ fn validate_certificate(value: &Value) -> Vec<String> {
     }
 
     if let Some(runtime) = require_object(obj.get("runtime"), "runtime", &mut errors) {
+        reject_unknown_critical_fields(
+            runtime,
+            &["workflow_ref", "runner_class", "started_at", "finished_at"],
+            "runtime",
+            &mut errors,
+        );
         require_non_empty_string(
             runtime.get("workflow_ref"),
             "runtime.workflow_ref",
@@ -343,6 +385,17 @@ fn validate_certificate(value: &Value) -> Vec<String> {
 
     if let Some(policy_value) = obj.get("policy") {
         if let Some(policy) = require_object(Some(policy_value), "policy", &mut errors) {
+            reject_unknown_critical_fields(
+                policy,
+                &[
+                    "schema_version",
+                    "policy_hash",
+                    "policy_ref",
+                    "policy_generated_at",
+                ],
+                "policy",
+                &mut errors,
+            );
             require_eq_str(
                 policy.get("schema_version"),
                 "agent_swarm-policy-v1",
@@ -351,6 +404,27 @@ fn validate_certificate(value: &Value) -> Vec<String> {
             );
             require_prefixed_hash(policy.get("policy_hash"), "policy.policy_hash", &mut errors);
             require_non_empty_string(policy.get("policy_ref"), "policy.policy_ref", &mut errors);
+        }
+    }
+
+    if let Some(replay_value) = obj.get("replay") {
+        if let Some(replay) = require_object(Some(replay_value), "replay", &mut errors) {
+            reject_unknown_critical_fields(
+                replay,
+                &["nonce", "expires_at_unix"],
+                "replay",
+                &mut errors,
+            );
+            require_non_empty_string(replay.get("nonce"), "replay.nonce", &mut errors);
+            match replay.get("expires_at_unix").and_then(Value::as_u64) {
+                Some(value) if value > 0 => {}
+                Some(_) => {
+                    errors.push("replay.expires_at_unix must be greater than zero".to_string())
+                }
+                None => {
+                    errors.push("replay.expires_at_unix must be an unsigned integer".to_string())
+                }
+            }
         }
     }
 
@@ -473,10 +547,37 @@ fn require_prefixed_hash(value: Option<&Value>, field: &str, errors: &mut Vec<St
     }
 }
 
+fn reject_unknown_critical_fields(
+    obj: &serde_json::Map<String, Value>,
+    allowed: &[&str],
+    scope: &str,
+    errors: &mut Vec<String>,
+) {
+    for key in obj.keys() {
+        if allowed.contains(&key.as_str()) {
+            continue;
+        }
+        if key.starts_with("critical_") {
+            errors.push(format!(
+                "{scope}.{key} is not allowed (unknown critical field)"
+            ));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{known_kinds, validate_schema_kind, validate_schema_value};
     use serde_json::json;
+
+    const CERT_REPLAY_VALID: &str =
+        include_str!("../../fixtures/contracts/certificate.replay.valid.json");
+    const CERT_REPLAY_INVALID_MISSING_NONCE: &str =
+        include_str!("../../fixtures/contracts/certificate.replay.invalid-missing-nonce.json");
+    const CERT_REPLAY_INVALID_ZERO_EXPIRY: &str =
+        include_str!("../../fixtures/contracts/certificate.replay.invalid-zero-expiry.json");
+    const CERT_UNKNOWN_CRITICAL: &str =
+        include_str!("../../fixtures/contracts/certificate.unknown-critical.json");
 
     #[test]
     fn validates_known_schema() {
@@ -583,6 +684,59 @@ mod tests {
             res.errors
                 .iter()
                 .any(|err| err.contains("policy.policy_ref"))
+        );
+    }
+
+    #[test]
+    fn validates_certificate_replay_fixture() {
+        let value: serde_json::Value =
+            serde_json::from_str(CERT_REPLAY_VALID).expect("parse replay fixture");
+        let res = validate_schema_value("certificate", &value);
+        assert!(res.valid, "errors: {:?}", res.errors);
+    }
+
+    #[test]
+    fn rejects_certificate_replay_missing_nonce_fixture() {
+        let value: serde_json::Value = serde_json::from_str(CERT_REPLAY_INVALID_MISSING_NONCE)
+            .expect("parse replay missing nonce fixture");
+        let res = validate_schema_value("certificate", &value);
+        assert!(!res.valid);
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.contains("replay.nonce") || err.contains("fixture invalid")),
+            "errors: {:?}",
+            res.errors
+        );
+    }
+
+    #[test]
+    fn rejects_certificate_replay_zero_expiry_fixture() {
+        let value: serde_json::Value = serde_json::from_str(CERT_REPLAY_INVALID_ZERO_EXPIRY)
+            .expect("parse replay zero expiry fixture");
+        let res = validate_schema_value("certificate", &value);
+        assert!(!res.valid);
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.contains("replay.expires_at_unix")),
+            "errors: {:?}",
+            res.errors
+        );
+    }
+
+    #[test]
+    fn rejects_certificate_unknown_critical_field_fixture() {
+        let value: serde_json::Value =
+            serde_json::from_str(CERT_UNKNOWN_CRITICAL).expect("parse unknown critical fixture");
+        let res = validate_schema_value("certificate", &value);
+        assert!(!res.valid);
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.contains("unknown critical field")),
+            "errors: {:?}",
+            res.errors
         );
     }
 }

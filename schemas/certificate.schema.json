@@ -69,6 +69,15 @@
         "policy_generated_at": { "type": "string", "minLength": 1 }
       },
       "additionalProperties": true
+    },
+    "replay": {
+      "type": "object",
+      "required": ["nonce", "expires_at_unix"],
+      "properties": {
+        "nonce": { "type": "string", "minLength": 1 },
+        "expires_at_unix": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
     }
   },
   "additionalProperties": true

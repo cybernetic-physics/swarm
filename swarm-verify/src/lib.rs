@@ -17,6 +17,7 @@ pub struct Certificate {
     pub runtime: Runtime,
     pub timestamp: String,
     pub policy: Option<PolicyBinding>,
+    pub replay: Option<ReplayProtection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -54,6 +55,12 @@ pub struct PolicyBinding {
     pub policy_hash: String,
     pub policy_ref: String,
     pub policy_generated_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ReplayProtection {
+    pub nonce: String,
+    pub expires_at_unix: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -177,6 +184,13 @@ pub fn verify_certificate_semantics(certificate: &Certificate) -> Result<()> {
         }
         ensure_sha256(&policy.policy_hash, "policy.policy_hash")?;
         ensure_non_empty(&policy.policy_ref, "policy.policy_ref")?;
+    }
+
+    if let Some(replay) = &certificate.replay {
+        ensure_non_empty(&replay.nonce, "replay.nonce")?;
+        if replay.expires_at_unix == 0 {
+            bail!("replay.expires_at_unix must be greater than zero");
+        }
     }
 
     Ok(())
@@ -326,6 +340,14 @@ mod tests {
 
     const CERTIFICATE_FIXTURE: &str =
         include_str!("../../fixtures/contracts/certificate.valid.json");
+    const CERTIFICATE_REPLAY_FIXTURE: &str =
+        include_str!("../../fixtures/contracts/certificate.replay.valid.json");
+    const CERTIFICATE_REPLAY_MISSING_NONCE_FIXTURE: &str =
+        include_str!("../../fixtures/contracts/certificate.replay.invalid-missing-nonce.json");
+    const CERTIFICATE_REPLAY_ZERO_EXPIRY_FIXTURE: &str =
+        include_str!("../../fixtures/contracts/certificate.replay.invalid-zero-expiry.json");
+    const CERTIFICATE_UNKNOWN_CRITICAL_FIXTURE: &str =
+        include_str!("../../fixtures/contracts/certificate.unknown-critical.json");
 
     #[test]
     fn hash_binding_succeeds_for_same_bytes() {
@@ -408,6 +430,89 @@ mod tests {
             err.to_string()
                 .contains("certificate schema validation failed")
         );
+    }
+
+    #[test]
+    fn verify_certificate_file_passes_with_replay_fixture() {
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("certificate.replay.json");
+        fs::write(&path, CERTIFICATE_REPLAY_FIXTURE).expect("write replay fixture");
+        let expected_hash = hash_certificate_bytes(CERTIFICATE_REPLAY_FIXTURE.as_bytes());
+
+        let cert = verify_certificate_file(
+            &path,
+            &expected_hash,
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        .expect("replay-enabled fixture certificate should verify");
+        assert!(cert.replay.is_some());
+    }
+
+    #[test]
+    fn verify_certificate_file_rejects_replay_missing_nonce_fixture() {
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp
+            .path()
+            .join("certificate.replay.invalid-missing-nonce.json");
+        fs::write(&path, CERTIFICATE_REPLAY_MISSING_NONCE_FIXTURE)
+            .expect("write invalid replay fixture");
+        let expected_hash =
+            hash_certificate_bytes(CERTIFICATE_REPLAY_MISSING_NONCE_FIXTURE.as_bytes());
+
+        let err = verify_certificate_file(
+            &path,
+            &expected_hash,
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        .expect_err("replay fixture missing nonce should fail");
+        assert!(
+            err.to_string().contains("replay.nonce")
+                || err
+                    .to_string()
+                    .contains("certificate schema validation failed")
+        );
+    }
+
+    #[test]
+    fn verify_certificate_file_rejects_replay_zero_expiry_fixture() {
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp
+            .path()
+            .join("certificate.replay.invalid-zero-expiry.json");
+        fs::write(&path, CERTIFICATE_REPLAY_ZERO_EXPIRY_FIXTURE)
+            .expect("write invalid replay expiry fixture");
+        let expected_hash =
+            hash_certificate_bytes(CERTIFICATE_REPLAY_ZERO_EXPIRY_FIXTURE.as_bytes());
+
+        let err = verify_certificate_file(
+            &path,
+            &expected_hash,
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        .expect_err("replay fixture with zero expiry should fail");
+        assert!(
+            err.to_string().contains("replay.expires_at_unix")
+                || err
+                    .to_string()
+                    .contains("certificate schema validation failed")
+        );
+    }
+
+    #[test]
+    fn verify_certificate_file_rejects_unknown_critical_field_fixture() {
+        let tmp = TempDir::new().expect("temp dir");
+        let path = tmp.path().join("certificate.unknown-critical.json");
+        fs::write(&path, CERTIFICATE_UNKNOWN_CRITICAL_FIXTURE)
+            .expect("write unknown critical fixture");
+        let expected_hash = hash_certificate_bytes(CERTIFICATE_UNKNOWN_CRITICAL_FIXTURE.as_bytes());
+
+        let err = verify_certificate_file(
+            &path,
+            &expected_hash,
+            "0123456789abcdef0123456789abcdef01234567",
+        )
+        .expect_err("unknown critical field should fail");
+        assert!(err.to_string().contains("unknown critical field"));
     }
 
     #[test]

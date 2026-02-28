@@ -1,0 +1,30 @@
+{
+  "type": "loom-agent-run-v1",
+  "job_id": "run-fixture-critical-0001",
+  "request_hash": "sha256:request-fixture-critical-hash",
+  "mode": "prompt-run",
+  "parent_state": {
+    "state_id": "state-root-critical-0001",
+    "bundle_sha256": "sha256:bundle-parent-critical-hash",
+    "ratchet_step": 1
+  },
+  "result": {
+    "response_sha256": "sha256:response-fixture-critical-hash",
+    "response_locator": "local://runs/run-fixture-critical-0001/result.json",
+    "new_state": {
+      "state_id": "state-child-critical-0001",
+      "bundle_sha256": "sha256:bundle-child-critical-hash",
+      "bundle_manifest_sha256": "sha256:manifest-child-critical-hash"
+    }
+  },
+  "runtime": {
+    "workflow_ref": "owner/repo/.github/workflows/swarm-run.yml@0123456789abcdef0123456789abcdef01234567",
+    "runner_class": "github-hosted",
+    "started_at": "2026-02-28T12:00:10Z",
+    "finished_at": "2026-02-28T12:00:20Z"
+  },
+  "critical_future_extension": {
+    "nonce": "unknown-critical-field"
+  },
+  "timestamp": "2026-02-28T12:00:20Z"
+}

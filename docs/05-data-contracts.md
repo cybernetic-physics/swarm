@@ -61,6 +61,10 @@ Date: 2026-02-28
     "started_at": "RFC3339",
     "finished_at": "RFC3339"
   },
+  "replay": {
+    "nonce": "string",
+    "expires_at_unix": 1893456000
+  },
   "policy": {
     "schema_version": "agent_swarm-policy-v1",
     "policy_hash": "sha256(...)",
@@ -75,6 +79,8 @@ Notes:
 - `policy` is optional for backward compatibility.
 - when present, verifier expects policy bytes and enforces `sha256(policy_bytes) == policy_hash`.
 - strict verifier mode can require policy presence (`--require-policy`).
+- `replay` is optional; when present it must include non-empty `nonce` and `expires_at_unix > 0`.
+- unknown fields that start with `critical_` are rejected in certificate validation (top-level and nested certificate objects).
 
 ## 3) Backend output artifacts
 

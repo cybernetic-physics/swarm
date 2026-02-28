@@ -86,7 +86,7 @@ Done-when:
 ## Immediate next implementation order
 
 1. Add settlement-layer policy hash enforcement path (M4 Phase 2).
-2. Extend security hardening with replay-protection fixtures and stricter certificate critical-field policy.
+2. Continue security hardening with signed capability envelopes + stronger replay resistance beyond fixture-level checks.
 3. (Postponed) Add GitLab backend parity scaffolding (M5).
 4. (Postponed) Add storage adapter abstraction and S3 manifest-integrity path.
 

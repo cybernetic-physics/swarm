@@ -41,8 +41,8 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 
 - [x] Secret redaction tests for logs.
 - [x] Token rotation atomicity tests.
-- [ ] Replay protection fixture coverage (`job_id`, `request_hash`, nonce/expiry).
-- [ ] Certificate schema strictness tests (reject unknown critical fields policy).
+- [x] Replay protection fixture coverage (`job_id`, `request_hash`, nonce/expiry).
+- [x] Certificate schema strictness tests (reject unknown critical fields policy).
 
 ## Track: developer experience
 
