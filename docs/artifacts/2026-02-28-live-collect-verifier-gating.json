@@ -1,0 +1,56 @@
+{
+  "date": "2026-02-28",
+  "executed_at_utc": "2026-02-28T14:37:37Z",
+  "commit": "fcc0c8dde1808739191e7ad393429d0b5c529b1b",
+  "workflow_ref": "cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@fcc0c8dde1808739191e7ad393429d0b5c529b1b",
+  "run": {
+    "run_id": "live-collect-gate-1772289332",
+    "gh_run_id": 22522712134,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22522712134",
+    "dispatch_ref": "main",
+    "dispatch_attempts_used": 1,
+    "collect_attempts_used": 1,
+    "restore_mode": "checkpoint",
+    "bundle_ref": "gh-artifact://22522712134/state-bundle-live-collect-gate-1772289332",
+    "bundle_sha256": "sha256:23ceb68daf4b42f79cb598bbc14157d2c19dd78008c9c1256f9a4d2ec7fe6304",
+    "state_id": "state-live-collect-gate-1772289332",
+    "ratchet_step": 1,
+    "artifact_hash": "sha256:f5cbed9f2572be97eabb2d6beef282f69bd80931cfde9faf8271d5324fdada1a",
+    "policy_hash": "sha256:a45ccf01a9b595999926375c7137dc86ede3ce165220533ec474568eb235f945",
+    "state_cap_next_sha256": "03b7c530a8de20bf0c31d745ad1d17f9e5f350c966c09aad744d63246a5c97f0",
+    "net_cap_next_sha256": "2ea95e31255d41a8290f601a1a39c9d90a42e3a2ad00b3200f55c7daf7cb4ecb",
+    "verification_ok": true,
+    "verification_reason": "ok",
+    "compatibility_ok": true,
+    "compatibility_reason": "ok",
+    "errors_count": 0,
+    "artifact_report": {
+      "required": [
+        "result.json",
+        "next_tokens.json",
+        "certificate.json",
+        "policy.json"
+      ],
+      "found": [
+        "result.json",
+        "next_tokens.json",
+        "certificate.json",
+        "policy.json"
+      ],
+      "missing": []
+    },
+    "result_ref": "local://.swarm/local/runs/live-collect-gate-1772289332/result.json",
+    "next_tokens_ref": "local://.swarm/local/runs/live-collect-gate-1772289332/next_tokens.json",
+    "certificate_ref": "local://.swarm/local/runs/live-collect-gate-1772289332/certificate.json",
+    "policy_ref": "local://.swarm/local/runs/live-collect-gate-1772289332/policy.json",
+    "dispatch_json_path": "/tmp/swarm_dispatch_live-collect-gate-1772289332.json",
+    "collect_json_path": "/tmp/swarm_collect_live-collect-gate-1772289332.json"
+  },
+  "assertions": {
+    "workflow_completed_success": true,
+    "collect_verifier_gate_passed": true,
+    "strict_policy_artifact_presence_enforced": true,
+    "no_collect_errors": true,
+    "checkpoint_restore_mode_confirmed": true
+  }
+}

@@ -325,3 +325,42 @@ cargo run -p swarm-cli -- run status --run-id "${RUN_ID}" --json
 ```
 
 Expected: resolved status from local collected `result.json`.
+
+## Collect verifier gating validation (2026-02-28)
+
+A live single-step dispatch/collect run was executed after collect-time verifier gating landed on commit:
+
+- `fcc0c8dde1808739191e7ad393429d0b5c529b1b`
+
+Run details:
+
+- `run_id`: `live-collect-gate-1772289332`
+- GitHub run: `22522712134`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22522712134`
+- Workflow ref: `cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@fcc0c8dde1808739191e7ad393429d0b5c529b1b`
+
+Collect-time verification outcomes:
+
+- `verification_ok=true`
+- `verification_reason=ok`
+- `compatibility_ok=true`
+- `restore_mode=checkpoint`
+- `errors=[]`
+- Required artifacts enforced and found:
+  - `result.json`
+  - `next_tokens.json`
+  - `certificate.json`
+  - `policy.json`
+
+Dispatch/collect attempt counts:
+
+- dispatch attempts used: `1`
+- collect attempts used: `1`
+
+Conclusion:
+
+- The GitHub collect verifier gate worked end-to-end on live workflow output and enforced cert/policy verification in the default path.
+
+Machine-readable test record:
+
+- `docs/artifacts/2026-02-28-live-collect-verifier-gating.json`
