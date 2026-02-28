@@ -37,6 +37,16 @@ Current known limitation:
 
 - Dispatch does not yet auto-return or auto-resolve `gh_run_id`; collect still requires manually selecting the run id from Actions.
 
+Current storage mode (workflow `swarm-live-run.yml`):
+
+- Outgoing state bundle is encrypted before upload as `state_bundle.tar.enc`.
+- Artifact locator returned to CLI is `gh-artifact://<gh_run_id>/state-bundle-<run_id>`.
+- Multi-step resume inputs are passed by CLI via env overrides:
+  - `SWARM_CHECKPOINT_IN`
+  - `SWARM_STATE_CAP_IN`
+  - `SWARM_NET_CAP_IN`
+- Intermediate chain-key files are kept in non-uploaded runtime workspace paths (not under artifact upload roots).
+
 ## Preconditions
 
 - In repo root:
@@ -113,6 +123,16 @@ Expected: success and local files written:
 
 - `.swarm/local/runs/${RUN_ID}/result.json`
 - `.swarm/local/runs/${RUN_ID}/next_tokens.json`
+
+For encrypted continuity, extract:
+
+```bash
+CHECKPOINT_IN="$(jq -r '.bundle_ref' ".swarm/local/runs/${RUN_ID}/result.json")"
+STATE_CAP_IN="$(jq -r '.state_cap_next' ".swarm/local/runs/${RUN_ID}/next_tokens.json")"
+NET_CAP_IN="$(jq -r '.net_cap_next' ".swarm/local/runs/${RUN_ID}/next_tokens.json")"
+```
+
+and use these inputs for the next dispatch.
 
 ## 5) Confirm status path
 

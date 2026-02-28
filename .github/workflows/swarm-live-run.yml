@@ -36,6 +36,16 @@ on:
         required: false
         default: ""
         type: string
+      state_cap_in:
+        description: "Optional state capability token from previous step"
+        required: false
+        default: ""
+        type: string
+      net_cap_in:
+        description: "Optional net capability token from previous step"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   live-run:
@@ -43,6 +53,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      actions: read
 
     steps:
       - name: Validate expected commit pin
@@ -56,17 +67,181 @@ jobs:
             exit 1
           fi
 
+      - name: Build capability context
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ inputs.request_id }}"
+          mkdir -p artifact workspace_state incoming runtime
+          export RUN_ID="${run_id}"
+          export STATE_CAP_IN="${{ inputs.state_cap_in }}"
+          export NET_CAP_IN="${{ inputs.net_cap_in }}"
+          python3 - <<'PY'
+          import base64
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+
+          run_id = os.environ["RUN_ID"]
+          state_cap_in = os.environ.get("STATE_CAP_IN", "").strip()
+          net_cap_in = os.environ.get("NET_CAP_IN", "").strip()
+
+          def decode_token(token: str) -> dict:
+              padding = "=" * (-len(token) % 4)
+              payload = base64.urlsafe_b64decode(token + padding)
+              return json.loads(payload.decode())
+
+          def encode_token(obj: dict) -> str:
+              payload = json.dumps(obj, separators=(",", ":")).encode()
+              return base64.urlsafe_b64encode(payload).decode().rstrip("=")
+
+          if state_cap_in:
+              state_current = decode_token(state_cap_in)
+          else:
+              state_seed = hashlib.sha256(f"seed-state::{run_id}".encode()).hexdigest()
+              state_current = {
+                  "version": 1,
+                  "kind": "state_cap",
+                  "state_id": f"state-{run_id}-seed",
+                  "ratchet_step": 0,
+                  "chain_key": state_seed,
+              }
+
+          if net_cap_in:
+              net_current = decode_token(net_cap_in)
+          else:
+              net_seed = hashlib.sha256(f"seed-net::{run_id}".encode()).hexdigest()
+              net_current = {
+                  "version": 1,
+                  "kind": "net_cap",
+                  "state_id": state_current["state_id"],
+                  "ratchet_step": state_current["ratchet_step"],
+                  "chain_key": net_seed,
+              }
+
+          def derive(chain_key: str, context: str) -> str:
+              return hashlib.sha256(f"{chain_key}::{context}".encode()).hexdigest()
+
+          state_next = {
+              "version": 1,
+              "kind": "state_cap",
+              "state_id": f"state-{run_id}",
+              "ratchet_step": int(state_current["ratchet_step"]) + 1,
+              "chain_key": derive(state_current["chain_key"], f"run:{run_id}"),
+          }
+          net_next = {
+              "version": 1,
+              "kind": "net_cap",
+              "state_id": state_next["state_id"],
+              "ratchet_step": state_next["ratchet_step"],
+              "chain_key": derive(net_current["chain_key"], f"run:{run_id}"),
+          }
+
+          Path("runtime/state_cap_next.token").write_text(encode_token(state_next), encoding="utf-8")
+          Path("runtime/net_cap_next.token").write_text(encode_token(net_next), encoding="utf-8")
+          Path("runtime/state_chain_key_current.txt").write_text(state_current["chain_key"], encoding="utf-8")
+          Path("runtime/state_chain_key_next.txt").write_text(state_next["chain_key"], encoding="utf-8")
+          Path("runtime/state_id_next.txt").write_text(state_next["state_id"], encoding="utf-8")
+          Path("runtime/ratchet_step_next.txt").write_text(str(state_next["ratchet_step"]), encoding="utf-8")
+          Path("artifact/capability_meta.json").write_text(
+              json.dumps(
+                  {
+                      "state_current": {
+                          "state_id": state_current["state_id"],
+                          "ratchet_step": state_current["ratchet_step"],
+                      },
+                      "state_next": {
+                          "state_id": state_next["state_id"],
+                          "ratchet_step": state_next["ratchet_step"],
+                      },
+                      "net_current": {
+                          "ratchet_step": net_current["ratchet_step"],
+                      },
+                      "net_next": {
+                          "ratchet_step": net_next["ratchet_step"],
+                      },
+                  },
+                  indent=2,
+              ),
+              encoding="utf-8",
+          )
+          PY
+
+      - name: Restore encrypted prior bundle (optional)
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          checkpoint="${{ inputs.checkpoint_in }}"
+          if [ -z "${checkpoint}" ]; then
+            echo "No checkpoint_in provided; starting new state episode."
+            echo 0 > workspace_state/counter.txt
+            exit 0
+          fi
+
+          if [[ "${checkpoint}" =~ ^gh-artifact://([0-9]+)/(.+)$ ]]; then
+            source_run_id="${BASH_REMATCH[1]}"
+            source_artifact="${BASH_REMATCH[2]}"
+          else
+            echo "::error::checkpoint_in must match gh-artifact://<run_id>/<artifact_name>"
+            exit 1
+          fi
+
+          gh run download "${source_run_id}" \
+            -R "${GITHUB_REPOSITORY}" \
+            -n "${source_artifact}" \
+            -D incoming
+
+          encrypted_path="$(find incoming -type f -name 'state_bundle.tar.enc' | head -n 1 || true)"
+          if [ -z "${encrypted_path}" ]; then
+            echo "::error::state_bundle.tar.enc not found in downloaded artifact"
+            exit 1
+          fi
+
+          current_key="$(cat runtime/state_chain_key_current.txt)"
+          openssl enc -d -aes-256-cbc -pbkdf2 \
+            -in "${encrypted_path}" \
+            -out state_bundle.tar \
+            -pass "pass:${current_key}"
+
+          tar -xf state_bundle.tar -C workspace_state
+
+      - name: Execute step and create encrypted next bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ inputs.request_id }}"
+          counter_file="workspace_state/counter.txt"
+          if [ ! -f "${counter_file}" ]; then
+            echo 0 > "${counter_file}"
+          fi
+          counter="$(cat "${counter_file}")"
+          counter="$((counter + 1))"
+          echo "${counter}" > "${counter_file}"
+          printf '%s\n' "${run_id}" >> workspace_state/history.log
+
+          tar -cf state_bundle.tar -C workspace_state .
+          next_key="$(cat runtime/state_chain_key_next.txt)"
+          openssl enc -aes-256-cbc -pbkdf2 \
+            -in state_bundle.tar \
+            -out artifact/state_bundle.tar.enc \
+            -pass "pass:${next_key}"
+
       - name: Emit contract artifacts
         shell: bash
         run: |
           set -euo pipefail
           run_id="${{ inputs.request_id }}"
-          mkdir -p artifact
-
-          bundle_hash="sha256:$(printf '%s' "${run_id}::bundle" | sha256sum | awk '{print $1}')"
+          state_id_next="$(cat runtime/state_id_next.txt)"
+          ratchet_step_next="$(cat runtime/ratchet_step_next.txt)"
+          state_cap="$(cat runtime/state_cap_next.token)"
+          net_cap="$(cat runtime/net_cap_next.token)"
+          bundle_artifact_name="state-bundle-${run_id}"
+          bundle_ref="gh-artifact://${GITHUB_RUN_ID}/${bundle_artifact_name}"
+          bundle_hash="sha256:$(sha256sum artifact/state_bundle.tar.enc | awk '{print $1}')"
           artifact_hash="sha256:$(printf '%s' "${run_id}::certificate" | sha256sum | awk '{print $1}')"
-          state_cap="$(printf '%s' "${run_id}::state_cap" | base64 | tr -d '\n=' | tr '/+' '_-')"
-          net_cap="$(printf '%s' "${run_id}::net_cap" | base64 | tr -d '\n=' | tr '/+' '_-')"
 
           cat > artifact/result.json <<JSON
           {
@@ -75,9 +250,9 @@ jobs:
             "operation": "launch",
             "node_id": "github-node-${run_id}",
             "parent_node_id": "root",
-            "state_id": "state-${run_id}",
+            "state_id": "${state_id_next}",
             "restore_mode": "checkpoint",
-            "bundle_ref": "artifact://bundles/${run_id}.tar",
+            "bundle_ref": "${bundle_ref}",
             "bundle_sha256": "${bundle_hash}",
             "certificate_ref": "artifact://certificates/${run_id}.json",
             "artifact_hash": "${artifact_hash}"
@@ -88,8 +263,8 @@ jobs:
           {
             "state_cap_next": "${state_cap}",
             "net_cap_next": "${net_cap}",
-            "state_id_next": "state-${run_id}",
-            "ratchet_step": 1
+            "state_id_next": "${state_id_next}",
+            "ratchet_step": ${ratchet_step_next}
           }
           JSON
 
@@ -98,3 +273,9 @@ jobs:
         with:
           name: swarm-live-${{ inputs.request_id }}
           path: artifact/
+
+      - name: Upload encrypted state bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: state-bundle-${{ inputs.request_id }}
+          path: artifact/state_bundle.tar.enc

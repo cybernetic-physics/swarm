@@ -112,6 +112,7 @@ struct DispatchOptions<'a> {
     dry_run: bool,
     policy: &'a GhCommandPolicy,
     gh_binary: &'a Path,
+    dispatch_inputs: DispatchInputOverrides,
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +122,23 @@ struct CollectOptions<'a> {
     dry_run: bool,
     policy: &'a GhCommandPolicy,
     gh_binary: &'a Path,
+}
+
+#[derive(Debug, Clone, Default)]
+struct DispatchInputOverrides {
+    checkpoint_in: Option<String>,
+    state_cap_in: Option<String>,
+    net_cap_in: Option<String>,
+}
+
+impl DispatchInputOverrides {
+    fn from_env() -> Self {
+        Self {
+            checkpoint_in: dispatch_input_override("SWARM_CHECKPOINT_IN"),
+            state_cap_in: dispatch_input_override("SWARM_STATE_CAP_IN"),
+            net_cap_in: dispatch_input_override("SWARM_NET_CAP_IN"),
+        }
+    }
 }
 
 impl Default for GhCommandPolicy {
@@ -327,6 +345,7 @@ pub fn dispatch_run_with_policy(
         dry_run,
         policy,
         gh_binary: Path::new("gh"),
+        dispatch_inputs: DispatchInputOverrides::from_env(),
     };
     dispatch_run_internal(cwd, spec, &options)
 }
@@ -378,9 +397,26 @@ fn dispatch_run_internal(
         format!("inputs[agent_step]={}", options.agent_step),
     ];
 
-    if options.allow_cold_start {
+    match options.dispatch_inputs.checkpoint_in.as_deref() {
+        Some(value) => {
+            cmd.push("-f".to_string());
+            cmd.push(format!("inputs[checkpoint_in]={value}"));
+        }
+        None if options.allow_cold_start => {
+            cmd.push("-f".to_string());
+            cmd.push("inputs[checkpoint_in]=".to_string());
+        }
+        None => {}
+    }
+
+    if let Some(value) = options.dispatch_inputs.state_cap_in.as_deref() {
         cmd.push("-f".to_string());
-        cmd.push("inputs[checkpoint_in]=".to_string());
+        cmd.push(format!("inputs[state_cap_in]={value}"));
+    }
+
+    if let Some(value) = options.dispatch_inputs.net_cap_in.as_deref() {
+        cmd.push("-f".to_string());
+        cmd.push(format!("inputs[net_cap_in]={value}"));
     }
 
     let attempts_used = if options.dry_run {
@@ -851,6 +887,16 @@ fn dispatch_ref() -> String {
         .unwrap_or_else(|| "main".to_string())
 }
 
+fn dispatch_input_override(var: &str) -> Option<String> {
+    normalized_dispatch_input_override(std::env::var(var).ok())
+}
+
+fn normalized_dispatch_input_override(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
 #[derive(Debug, Clone, Copy)]
 enum GhOperation {
     Dispatch,
@@ -1259,6 +1305,59 @@ mod tests {
     }
 
     #[test]
+    fn dispatch_override_inputs_are_included_without_empty_checkpoint() {
+        let cwd = TempDir::new().expect("temp dir");
+        let spec = sample_spec("dispatch-override-inputs");
+        let policy = GhCommandPolicy::default();
+        let options = DispatchOptions {
+            allow_cold_start: true,
+            agent_image: "ghcr.io/example/swarm-agent:test",
+            agent_step: "echo test",
+            dry_run: true,
+            policy: &policy,
+            gh_binary: Path::new("gh"),
+            dispatch_inputs: DispatchInputOverrides {
+                checkpoint_in: Some("gh-artifact://12345/state-bundle-run".to_string()),
+                state_cap_in: Some("state-cap-token".to_string()),
+                net_cap_in: Some("net-cap-token".to_string()),
+            },
+        };
+
+        let out =
+            dispatch_run_internal(cwd.path(), &spec, &options).expect("dispatch should succeed");
+        assert!(
+            out.command_preview.contains(
+                &"inputs[checkpoint_in]=gh-artifact://12345/state-bundle-run".to_string()
+            )
+        );
+        assert!(
+            out.command_preview
+                .contains(&"inputs[state_cap_in]=state-cap-token".to_string())
+        );
+        assert!(
+            out.command_preview
+                .contains(&"inputs[net_cap_in]=net-cap-token".to_string())
+        );
+        assert!(
+            !out.command_preview
+                .contains(&"inputs[checkpoint_in]=".to_string())
+        );
+    }
+
+    #[test]
+    fn normalized_dispatch_input_override_trims_and_drops_empty_values() {
+        assert_eq!(
+            normalized_dispatch_input_override(Some("  token ".to_string())),
+            Some("token".to_string())
+        );
+        assert_eq!(
+            normalized_dispatch_input_override(Some("  ".to_string())),
+            None
+        );
+        assert_eq!(normalized_dispatch_input_override(None), None);
+    }
+
+    #[test]
     fn dispatch_requires_workflow_ref() {
         let cwd = TempDir::new().expect("temp dir");
         let spec = RunSpec {
@@ -1496,6 +1595,7 @@ exit 0
             dry_run: false,
             policy: &policy,
             gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
         };
         let result = dispatch_run_internal(cwd.path(), &spec, &options)
             .expect("dispatch should succeed after retries");
@@ -1558,6 +1658,7 @@ exit 0
             dry_run: true,
             policy: &GhCommandPolicy::default(),
             gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
         };
         dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
 
@@ -1602,6 +1703,7 @@ exit 0
             dry_run: true,
             policy: &GhCommandPolicy::default(),
             gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
         };
         dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
 
@@ -1678,6 +1780,7 @@ exit 0
             dry_run: true,
             policy: &GhCommandPolicy::default(),
             gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
         };
         dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
 

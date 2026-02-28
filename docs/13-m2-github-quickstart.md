@@ -1,6 +1,6 @@
 # M2 quickstart (GitHub backend)
 
-Status: current (M2 + M2b)
+Status: current (M2 + M2b + encrypted artifact continuity)
 Date: 2026-02-28
 
 For a tested live path (single GitHub runner) with concrete run IDs and findings, see:
@@ -16,6 +16,10 @@ and M2b hardening:
 - retry/timeout policy flags,
 - artifact schema guards,
 - cancel behavior and run status updates.
+and encrypted state continuity:
+- checkpoint locator contract `gh-artifact://<gh_run_id>/<artifact_name>`,
+- encrypted state bundle upload (`state_bundle.tar.enc`),
+- dispatch input overrides via env vars for `checkpoint_in`, `state_cap_in`, `net_cap_in`.
 
 Run from:
 
@@ -68,6 +72,20 @@ cargo run -p swarm-cli -- backend github dispatch \
   --max-attempts 3 \
   --timeout-secs 45 \
   --json
+```
+
+Optional dispatch input overrides:
+
+- `SWARM_CHECKPOINT_IN`: explicit checkpoint locator (overrides automatic empty checkpoint input).
+- `SWARM_STATE_CAP_IN`: prior `state_cap_next` token.
+- `SWARM_NET_CAP_IN`: prior `net_cap_next` token.
+
+Example:
+
+```bash
+export SWARM_CHECKPOINT_IN='gh-artifact://22521216483/state-bundle-live-1772283564'
+export SWARM_STATE_CAP_IN='<state_cap_next token>'
+export SWARM_NET_CAP_IN='<net_cap_next token>'
 ```
 
 ## 3) Collect artifacts for a known GitHub run id
@@ -142,3 +160,36 @@ cargo run -p swarm-cli -- backend github dispatch \
 ```
 
 Expected result: error requiring a `40-hex` commit SHA.
+
+## 6) Multi-step encrypted checkpoint continuity
+
+After collecting run `RUN_ID_1`, extract checkpoint + capability inputs:
+
+```bash
+RUN_ID_1="live-step-1"
+CHECKPOINT_IN="$(jq -r '.bundle_ref' ".swarm/local/runs/${RUN_ID_1}/result.json")"
+STATE_CAP_IN="$(jq -r '.state_cap_next' ".swarm/local/runs/${RUN_ID_1}/next_tokens.json")"
+NET_CAP_IN="$(jq -r '.net_cap_next' ".swarm/local/runs/${RUN_ID_1}/next_tokens.json")"
+```
+
+Dispatch step 2 against the same pinned workflow:
+
+```bash
+RUN_ID_2="live-step-2"
+SWARM_CHECKPOINT_IN="${CHECKPOINT_IN}" \
+SWARM_STATE_CAP_IN="${STATE_CAP_IN}" \
+SWARM_NET_CAP_IN="${NET_CAP_IN}" \
+cargo run -p swarm-cli -- backend github dispatch \
+  --run-id "${RUN_ID_2}" \
+  --workflow-ref "${WORKFLOW_REF}" \
+  --max-attempts 3 \
+  --timeout-secs 45 \
+  --json
+```
+
+Then collect `RUN_ID_2` as usual. Expected behavior:
+
+- Workflow restores `state_bundle.tar.enc` from `CHECKPOINT_IN`.
+- It decrypts with the current ratchet key from `state_cap_in`.
+- It executes, re-encrypts the new bundle, uploads `state-bundle-${RUN_ID_2}`.
+- `result.json.bundle_ref` points to the new artifact locator for next step chaining.

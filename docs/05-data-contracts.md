@@ -72,11 +72,14 @@ Date: 2026-02-28
 - node transition summary.
 - restore mode.
 - certificate/artifact refs.
+- `bundle_ref` may use `gh-artifact://<gh_run_id>/<artifact_name>` for GitHub-backed encrypted bundles.
+- `bundle_sha256` should hash uploaded encrypted bytes (`state_bundle.tar.enc`).
 
 ### `next_tokens.json`
 - `state_cap_next` envelope ref.
 - `net_cap_next` envelope ref.
 - ratchet step metadata.
+- these capability tokens are required to decrypt/ratchet the next checkpoint in multi-step GitHub flows.
 
 ### `bundle_locator_next.json`
 - locator + hash metadata for outgoing encrypted bundle.
