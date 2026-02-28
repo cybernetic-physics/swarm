@@ -676,6 +676,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "swarm-proxy"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "clap",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "swarm-state"
 version = "0.1.0"
 dependencies = [

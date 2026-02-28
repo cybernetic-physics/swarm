@@ -1,0 +1,74 @@
+name: swarm-proxy-smoke
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  proxy-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build swarm-proxy
+        run: cargo build -p swarm-proxy
+
+      - name: End-to-end proxy smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          BIN="target/debug/swarm-proxy"
+          BROKER_ADDR="127.0.0.1:18787"
+          SESSION_ID="ci-session"
+          TARGET_PORT="19090"
+
+          TMP_ROOT="$(mktemp -d)"
+          echo "swarm-proxy-smoke-ok" > "${TMP_ROOT}/ping.txt"
+
+          cleanup() {
+            kill "${PROVIDER_PID:-}" "${BROKER_PID:-}" "${HTTP_PID:-}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          python3 -m http.server "${TARGET_PORT}" --bind 127.0.0.1 --directory "${TMP_ROOT}" >http.log 2>&1 &
+          HTTP_PID=$!
+
+          "${BIN}" broker --listen "${BROKER_ADDR}" >broker.log 2>&1 &
+          BROKER_PID=$!
+
+          TICKET_JSON="$("${BIN}" --json ticket --session-id "${SESSION_ID}" --broker "${BROKER_ADDR}")"
+          TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"${TICKET_JSON}")"
+
+          "${BIN}" provider --broker "${BROKER_ADDR}" --session-id "${SESSION_ID}" --token "${TOKEN}" >provider.log 2>&1 &
+          PROVIDER_PID=$!
+
+          for i in {1..30}; do
+            if curl -fsS \
+              --proxy "http://${BROKER_ADDR}" \
+              --proxy-user "${SESSION_ID}:${TOKEN}" \
+              "http://127.0.0.1:${TARGET_PORT}/ping.txt" > proxied.txt; then
+              break
+            fi
+            sleep 1
+          done
+
+          diff -u <(echo "swarm-proxy-smoke-ok") proxied.txt
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-smoke-logs
+          path: |
+            broker.log
+            provider.log
+            http.log
