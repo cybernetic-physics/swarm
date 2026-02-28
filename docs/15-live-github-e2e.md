@@ -30,6 +30,13 @@ COMMIT_SHA="$(git rev-parse HEAD)"
 WORKFLOW_REF="cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@${COMMIT_SHA}"
 ```
 
+Dispatch uses branch ref `main` by default for GitHub API compatibility.
+If you need another branch/tag, set:
+
+```bash
+export SWARM_GH_DISPATCH_REF="<branch-or-tag>"
+```
+
 ## 2) Dispatch live run
 
 ```bash

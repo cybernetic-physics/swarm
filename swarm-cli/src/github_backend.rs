@@ -149,6 +149,8 @@ pub struct GithubRunLedger {
     pub owner_repo: String,
     pub workflow_file: String,
     pub commit_sha: String,
+    #[serde(default)]
+    pub dispatch_ref: Option<String>,
     pub route_mode: String,
     pub fallback_policy: String,
     pub dispatched: bool,
@@ -343,6 +345,7 @@ fn dispatch_run_internal(
     let wf = parse_workflow_ref(&workflow_ref_raw)?;
 
     let owner_repo = format!("{}/{}", wf.owner, wf.repo);
+    let dispatch_ref = dispatch_ref();
 
     let endpoint = format!(
         "repos/{owner_repo}/actions/workflows/{}/dispatches",
@@ -360,7 +363,7 @@ fn dispatch_run_internal(
         "POST".to_string(),
         endpoint,
         "-f".to_string(),
-        format!("ref={}", wf.commit_sha),
+        format!("ref={dispatch_ref}"),
         "-f".to_string(),
         format!("inputs[request_id]={}", spec.run_id),
         "-f".to_string(),
@@ -398,6 +401,7 @@ fn dispatch_run_internal(
         owner_repo: owner_repo.clone(),
         workflow_file: wf.workflow_file.clone(),
         commit_sha: wf.commit_sha.clone(),
+        dispatch_ref: Some(dispatch_ref),
         route_mode: route_mode_str(&spec.route_mode).to_string(),
         fallback_policy: fallback_policy.to_string(),
         dispatched: !options.dry_run,
@@ -813,6 +817,7 @@ fn load_or_seed_ledger(
         owner_repo: format!("{}/{}", wf.owner, wf.repo),
         workflow_file: wf.workflow_file,
         commit_sha: wf.commit_sha,
+        dispatch_ref: None,
         route_mode: "direct".to_string(),
         fallback_policy: "allow_cold_start".to_string(),
         dispatched: false,
@@ -836,6 +841,14 @@ fn route_mode_str(mode: &RouteMode) -> &'static str {
         RouteMode::Direct => "direct",
         RouteMode::ClientExit => "client_exit",
     }
+}
+
+fn dispatch_ref() -> String {
+    std::env::var("SWARM_GH_DISPATCH_REF")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "main".to_string())
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1383,6 +1396,7 @@ mod tests {
             owner_repo: "owner/repo".to_string(),
             workflow_file: "loom-paid-run.yml".to_string(),
             commit_sha: "1234567890abcdef1234567890abcdef12345678".to_string(),
+            dispatch_ref: Some("main".to_string()),
             route_mode: "direct".to_string(),
             fallback_policy: "fail_closed".to_string(),
             dispatched: true,
