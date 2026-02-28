@@ -63,6 +63,7 @@ Not implemented yet:
 - `docs/12-m1-quickstart.md`: commands to use the implemented local backend path.
 - `docs/13-m2-github-quickstart.md`: commands to use the implemented GitHub dispatch/collect path.
 - `docs/14-m3-proxy-smoke-experiment.md`: experiment report with network diagrams, procedure, and results.
+- `docs/15-live-github-e2e.md`: runbook for real dispatch/collect testing with one GitHub runner.
 
 ## First implementation target
 

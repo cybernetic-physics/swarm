@@ -1,0 +1,100 @@
+name: swarm-live-run
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        description: "Swarm run id from CLI"
+        required: true
+        type: string
+      expected_commit_sha:
+        description: "Pinned commit required by caller"
+        required: true
+        type: string
+      source_backend:
+        description: "Input backend selector"
+        required: false
+        default: "artifact"
+        type: string
+      output_backend:
+        description: "Output backend selector"
+        required: false
+        default: "artifact"
+        type: string
+      agent_image:
+        description: "Agent image metadata"
+        required: false
+        default: "ghcr.io/example/swarm-agent:latest"
+        type: string
+      agent_step:
+        description: "Agent step metadata"
+        required: false
+        default: "echo swarm live run"
+        type: string
+      checkpoint_in:
+        description: "Optional checkpoint locator"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  live-run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+
+    steps:
+      - name: Validate expected commit pin
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected="${{ inputs.expected_commit_sha }}"
+          actual="${{ github.sha }}"
+          if [ "${expected}" != "${actual}" ]; then
+            echo "::error::expected_commit_sha mismatch expected=${expected} actual=${actual}"
+            exit 1
+          fi
+
+      - name: Emit contract artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          run_id="${{ inputs.request_id }}"
+          mkdir -p artifact
+
+          bundle_hash="sha256:$(printf '%s' "${run_id}::bundle" | sha256sum | awk '{print $1}')"
+          artifact_hash="sha256:$(printf '%s' "${run_id}::certificate" | sha256sum | awk '{print $1}')"
+          state_cap="$(printf '%s' "${run_id}::state_cap" | base64 | tr -d '\n=' | tr '/+' '_-')"
+          net_cap="$(printf '%s' "${run_id}::net_cap" | base64 | tr -d '\n=' | tr '/+' '_-')"
+
+          cat > artifact/result.json <<JSON
+          {
+            "run_id": "${run_id}",
+            "status": "succeeded",
+            "operation": "launch",
+            "node_id": "github-node-${run_id}",
+            "parent_node_id": "root",
+            "state_id": "state-${run_id}",
+            "restore_mode": "checkpoint",
+            "bundle_ref": "artifact://bundles/${run_id}.tar",
+            "bundle_sha256": "${bundle_hash}",
+            "certificate_ref": "artifact://certificates/${run_id}.json",
+            "artifact_hash": "${artifact_hash}"
+          }
+          JSON
+
+          cat > artifact/next_tokens.json <<JSON
+          {
+            "state_cap_next": "${state_cap}",
+            "net_cap_next": "${net_cap}",
+            "state_id_next": "state-${run_id}",
+            "ratchet_step": 1
+          }
+          JSON
+
+      - name: Upload swarm artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: swarm-live-${{ inputs.request_id }}
+          path: artifact/
