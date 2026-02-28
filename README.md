@@ -1,6 +1,6 @@
 # swarm
 
-Status: planning + M1 local backend + M2 GitHub adapter + M2b hardening
+Status: planning + M1 local backend + M2 GitHub adapter + M2b hardening + M3 proxy smoke harness
 Last updated: 2026-02-28
 
 `swarm` is the new CLI-first project under `/Users/cuboniks/Projects/agent_swarm/swarm`.
@@ -15,7 +15,7 @@ This planning set was built from:
 ## Current implementation status
 
 Implemented now:
-- Rust workspace with `swarm-cli`, `swarm-core`, `swarm-state`, `swarm-verify`.
+- Rust workspace with `swarm-cli`, `swarm-core`, `swarm-state`, `swarm-verify`, `swarm-proxy`.
 - Functional local M1 path:
   - launch/resume/fork with SQLite snapshot transitions,
   - deterministic local tar bundle generation,
@@ -33,10 +33,13 @@ Implemented now:
   - artifact schema guards for `result.json` and `next_tokens.json`,
   - machine-readable GitHub backend error taxonomy + stable exit code mapping,
   - expanded `doctor` diagnostics for GitHub CLI/auth/workflow pin validity.
+- M3 preflight proxy smoke harness:
+  - standalone broker/provider/ticket module in `swarm-proxy`,
+  - GitHub Actions end-to-end smoke workflow proving proxy handshake and payload forwarding.
 
 Not implemented yet:
 - run-id to GH run correlation automation after dispatch.
-- M3 `net_cap` proxy mode.
+- Full M3 integration into `swarm-cli` `net_cap` policy workflows (currently standalone `swarm-proxy` + smoke test).
 - M5 GitLab parity backend.
 
 ## Doc map
@@ -54,6 +57,7 @@ Not implemented yet:
 - `docs/11-open-questions.md`: decision register for unresolved architecture choices.
 - `docs/12-m1-quickstart.md`: commands to use the implemented local backend path.
 - `docs/13-m2-github-quickstart.md`: commands to use the implemented GitHub dispatch/collect path.
+- `docs/14-m3-proxy-smoke-experiment.md`: experiment report with network diagrams, procedure, and results.
 
 ## First implementation target
 
