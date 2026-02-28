@@ -19,6 +19,7 @@ Implemented now:
 - Functional local M1 path:
   - launch/resume/fork with SQLite snapshot transitions,
   - deterministic local tar bundle generation,
+  - deterministic conformance tests for repeated local artifact outputs,
   - run status + state inspect,
   - certificate schema/hash/commit semantics verification command,
   - proof/public-input hash-binding verification command.

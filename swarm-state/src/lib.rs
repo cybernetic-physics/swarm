@@ -1095,9 +1095,20 @@ fn route_mode_as_str(route_mode: &RouteMode) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::LocalEngine;
-    use swarm_core::{Backend, RouteMode, RunSpec};
+    use super::{LocalEngine, LocalRunArtifacts, prefixed_sha256};
+    use serde_json::Value;
+    use std::fs;
+    use std::path::Path;
+    use swarm_core::{Backend, CapabilityEnvelope, RouteMode, RunSpec, validate_schema_value};
     use tempfile::TempDir;
+
+    #[derive(Debug, Clone)]
+    struct ArtifactBytes {
+        bundle: Vec<u8>,
+        result: Vec<u8>,
+        next_tokens: Vec<u8>,
+        certificate: Vec<u8>,
+    }
 
     fn run_spec(run_id: &str, node: &str) -> RunSpec {
         RunSpec {
@@ -1107,6 +1118,101 @@ mod tests {
             route_mode: RouteMode::Direct,
             workflow_ref: Some("local/swarm-local-run.yml@local-dev-commit".to_string()),
         }
+    }
+
+    fn read_json(path: &Path) -> Value {
+        let bytes = fs::read(path).expect("json bytes");
+        serde_json::from_slice(&bytes).expect("json parse")
+    }
+
+    fn capture_artifact_bytes(
+        engine: &LocalEngine,
+        artifacts: &LocalRunArtifacts,
+    ) -> ArtifactBytes {
+        ArtifactBytes {
+            bundle: fs::read(engine.resolve_local_ref(&artifacts.bundle_ref))
+                .expect("bundle bytes"),
+            result: fs::read(engine.resolve_local_ref(&artifacts.result_ref))
+                .expect("result bytes"),
+            next_tokens: fs::read(engine.resolve_local_ref(&artifacts.next_tokens_ref))
+                .expect("next_tokens bytes"),
+            certificate: fs::read(engine.resolve_local_ref(&artifacts.certificate_ref))
+                .expect("certificate bytes"),
+        }
+    }
+
+    fn assert_run_artifact_contracts(
+        engine: &LocalEngine,
+        artifacts: &LocalRunArtifacts,
+    ) -> (CapabilityEnvelope, CapabilityEnvelope) {
+        let result_path = engine.resolve_local_ref(&artifacts.result_ref);
+        let next_tokens_path = engine.resolve_local_ref(&artifacts.next_tokens_ref);
+        let certificate_path = engine.resolve_local_ref(&artifacts.certificate_ref);
+        let bundle_path = engine.resolve_local_ref(&artifacts.bundle_ref);
+
+        let result_value = read_json(&result_path);
+        let result_check = validate_schema_value("result", &result_value);
+        assert!(
+            result_check.valid,
+            "result schema errors: {:?}",
+            result_check.errors
+        );
+
+        let next_tokens_value = read_json(&next_tokens_path);
+        let next_tokens_check = validate_schema_value("next_tokens", &next_tokens_value);
+        assert!(
+            next_tokens_check.valid,
+            "next_tokens schema errors: {:?}",
+            next_tokens_check.errors
+        );
+
+        let certificate_value = read_json(&certificate_path);
+        let certificate_check = validate_schema_value("certificate", &certificate_value);
+        assert!(
+            certificate_check.valid,
+            "certificate schema errors: {:?}",
+            certificate_check.errors
+        );
+
+        let bundle_bytes = fs::read(&bundle_path).expect("bundle bytes for hash validation");
+        let bundle_sha = result_value
+            .get("bundle_sha256")
+            .and_then(Value::as_str)
+            .expect("result bundle_sha256");
+        assert_eq!(bundle_sha, prefixed_sha256(&bundle_bytes));
+
+        let artifact_hash = result_value
+            .get("artifact_hash")
+            .and_then(Value::as_str)
+            .expect("result artifact_hash");
+        assert_eq!(artifact_hash, artifacts.artifact_hash);
+
+        let state_cap_token = next_tokens_value
+            .get("state_cap_next")
+            .and_then(Value::as_str)
+            .expect("state_cap_next");
+        let net_cap_token = next_tokens_value
+            .get("net_cap_next")
+            .and_then(Value::as_str)
+            .expect("net_cap_next");
+        let state_id_next = next_tokens_value
+            .get("state_id_next")
+            .and_then(Value::as_str)
+            .expect("state_id_next");
+        let ratchet_step = next_tokens_value
+            .get("ratchet_step")
+            .and_then(Value::as_u64)
+            .expect("ratchet_step");
+
+        let state_cap = CapabilityEnvelope::decode(state_cap_token).expect("decode state_cap");
+        let net_cap = CapabilityEnvelope::decode(net_cap_token).expect("decode net_cap");
+
+        assert_eq!(state_cap.state_id, state_id_next);
+        assert_eq!(state_cap.ratchet_step, ratchet_step);
+        assert_eq!(net_cap.state_id, state_cap.state_id);
+        assert_eq!(net_cap.ratchet_step, state_cap.ratchet_step);
+
+        (state_cap, net_cap)
     }
 
     #[test]
@@ -1167,5 +1273,93 @@ mod tests {
         assert!(extract_dir.join("manifest.json").exists());
         assert!(extract_dir.join("node.json").exists());
         assert!(extract_dir.join("state/state.snapshot.enc").exists());
+    }
+
+    #[test]
+    fn deterministic_launch_artifacts_are_byte_stable_across_engines() {
+        let temp_a = TempDir::new().expect("tempdir a");
+        let temp_b = TempDir::new().expect("tempdir b");
+        let engine_a = LocalEngine::new(temp_a.path().join(".swarm/local"));
+        let engine_b = LocalEngine::new(temp_b.path().join(".swarm/local"));
+
+        let run_a = engine_a
+            .launch(&run_spec("run-conformance-launch", "root"), false)
+            .expect("engine a launch");
+        let run_b = engine_b
+            .launch(&run_spec("run-conformance-launch", "root"), false)
+            .expect("engine b launch");
+
+        let bytes_a = capture_artifact_bytes(&engine_a, &run_a);
+        let bytes_b = capture_artifact_bytes(&engine_b, &run_b);
+
+        assert_eq!(bytes_a.bundle, bytes_b.bundle);
+        assert_eq!(bytes_a.result, bytes_b.result);
+        assert_eq!(bytes_a.next_tokens, bytes_b.next_tokens);
+        assert_eq!(bytes_a.certificate, bytes_b.certificate);
+
+        let (state_cap_a, net_cap_a) = assert_run_artifact_contracts(&engine_a, &run_a);
+        let (state_cap_b, net_cap_b) = assert_run_artifact_contracts(&engine_b, &run_b);
+        assert_eq!(state_cap_a, state_cap_b);
+        assert_eq!(net_cap_a, net_cap_b);
+    }
+
+    #[test]
+    fn deterministic_resume_artifacts_are_byte_stable_and_ratchet() {
+        let temp_a = TempDir::new().expect("tempdir a");
+        let temp_b = TempDir::new().expect("tempdir b");
+        let engine_a = LocalEngine::new(temp_a.path().join(".swarm/local"));
+        let engine_b = LocalEngine::new(temp_b.path().join(".swarm/local"));
+
+        let launch_a = engine_a
+            .launch(&run_spec("run-conformance-base", "root"), false)
+            .expect("engine a launch");
+        let launch_b = engine_b
+            .launch(&run_spec("run-conformance-base", "root"), false)
+            .expect("engine b launch");
+
+        let resume_a = engine_a
+            .resume(
+                &run_spec("run-conformance-resume", &launch_a.node_id),
+                false,
+            )
+            .expect("engine a resume");
+        let resume_b = engine_b
+            .resume(
+                &run_spec("run-conformance-resume", &launch_b.node_id),
+                false,
+            )
+            .expect("engine b resume");
+
+        let resume_bytes_a = capture_artifact_bytes(&engine_a, &resume_a);
+        let resume_bytes_b = capture_artifact_bytes(&engine_b, &resume_b);
+        assert_eq!(resume_bytes_a.bundle, resume_bytes_b.bundle);
+        assert_eq!(resume_bytes_a.result, resume_bytes_b.result);
+        assert_eq!(resume_bytes_a.next_tokens, resume_bytes_b.next_tokens);
+        assert_eq!(resume_bytes_a.certificate, resume_bytes_b.certificate);
+
+        let (launch_state_cap_a, launch_net_cap_a) =
+            assert_run_artifact_contracts(&engine_a, &launch_a);
+        let (launch_state_cap_b, launch_net_cap_b) =
+            assert_run_artifact_contracts(&engine_b, &launch_b);
+        assert_eq!(launch_state_cap_a, launch_state_cap_b);
+        assert_eq!(launch_net_cap_a, launch_net_cap_b);
+
+        let (resume_state_cap_a, resume_net_cap_a) =
+            assert_run_artifact_contracts(&engine_a, &resume_a);
+        let (resume_state_cap_b, resume_net_cap_b) =
+            assert_run_artifact_contracts(&engine_b, &resume_b);
+        assert_eq!(resume_state_cap_a, resume_state_cap_b);
+        assert_eq!(resume_net_cap_a, resume_net_cap_b);
+
+        assert_eq!(
+            resume_state_cap_a.ratchet_step,
+            launch_state_cap_a.ratchet_step + 1
+        );
+        assert_eq!(
+            resume_net_cap_a.ratchet_step,
+            launch_net_cap_a.ratchet_step + 1
+        );
+        assert_ne!(resume_state_cap_a.state_id, launch_state_cap_a.state_id);
+        assert_ne!(resume_net_cap_a.state_id, launch_net_cap_a.state_id);
     }
 }

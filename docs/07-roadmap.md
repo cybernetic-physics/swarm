@@ -78,8 +78,7 @@ Done-when:
 
 ## Immediate next implementation order
 
-1. Add deterministic conformance tests for repeated run artifacts.
-2. Add storage adapter abstraction and S3 manifest-integrity path.
-3. Tighten security hardening (secret redaction and token-rotation atomicity tests).
-4. Add optional policy-capsule hash branch (M4).
-5. Add GitLab backend parity scaffolding (M5).
+1. Add storage adapter abstraction and S3 manifest-integrity path.
+2. Tighten security hardening (secret redaction and token-rotation atomicity tests).
+3. Add optional policy-capsule hash branch (M4).
+4. Add GitLab backend parity scaffolding (M5).

@@ -20,7 +20,7 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 - [x] Add proxy-first `net_cap` mode with fail-closed policy path.
 - [x] Add timeout/retry/cancel policy to backend adapters.
 - [x] Add machine-readable error taxonomy and stable exit codes.
-- [ ] Add conformance tests for deterministic artifacts across repeated runs.
+- [x] Add conformance tests for deterministic artifacts across repeated runs.
 - [ ] Add storage adapters (local + S3) with manifest integrity checks.
 - [x] Add `doctor` command for env/workflow prerequisites.
 
