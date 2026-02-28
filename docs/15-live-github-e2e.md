@@ -84,6 +84,50 @@ Machine-readable test record:
 
 - `docs/artifacts/2026-02-28-live-two-step-chain.json`
 
+## Two-step chain with strict policy verification (2026-02-28)
+
+A live two-step chain was re-run after M4 Phase 1 integration on commit:
+
+- `918e3a08ddf514c28db73543a1e79374c6643bda`
+
+Workflow ref under test:
+
+- `cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@918e3a08ddf514c28db73543a1e79374c6643bda`
+
+Step 1:
+
+- `run_id`: `live-m4-policy-step1-1772288317`
+- GitHub run: `22522452249`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22522452249`
+- Collect result: success, `result.json` + `next_tokens.json` present.
+- Strict verifier check:
+  - `swarm verify cert --policy-file <policy.json> --require-policy`
+  - Result: pass
+
+Step 2 (chained from step 1 outputs):
+
+- `run_id`: `live-m4-policy-step2-1772288427`
+- GitHub run: `22522481452`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22522481452`
+- Dispatch inputs:
+  - `checkpoint_in=<step1 result bundle_ref>`
+  - `state_cap_in=<step1 next_tokens state_cap_next>`
+  - `net_cap_in=<step1 next_tokens net_cap_next>`
+- Collect result: success, `result.json` + `next_tokens.json` present.
+- Strict verifier check:
+  - `swarm verify cert --policy-file <policy.json> --require-policy`
+  - Result: pass
+
+Validated outcomes:
+
+- both strict policy verification checks passed.
+- step 2 consumed the step 1 checkpoint chain.
+- ratchet advanced from `1` to `2`.
+
+Machine-readable test record:
+
+- `docs/artifacts/2026-02-28-live-m4-policy-two-step-chain.json`
+
 ## Negative test: wrong key for newer state (2026-02-28)
 
 Purpose:

@@ -115,8 +115,6 @@ fn run() -> Result<()> {
                 } else {
                     println!("ticket written: {}", path.display());
                 }
-            } else if cli.json {
-                println!("{}", serde_json::to_string_pretty(&ticket)?);
             } else {
                 println!("{}", serde_json::to_string_pretty(&ticket)?);
             }

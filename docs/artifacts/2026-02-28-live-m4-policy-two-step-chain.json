@@ -1,0 +1,46 @@
+{
+  "date": "2026-02-28",
+  "executed_at_utc": "2026-02-28T14:25:48Z",
+  "commit": "918e3a08ddf514c28db73543a1e79374c6643bda",
+  "workflow_ref": "cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@918e3a08ddf514c28db73543a1e79374c6643bda",
+  "run1": {
+    "run_id": "live-m4-policy-step1-1772288317",
+    "gh_run_id": 22522452249,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22522452249",
+    "bundle_ref": "gh-artifact://22522452249/state-bundle-live-m4-policy-step1-1772288317",
+    "expected_bundle_ref": "gh-artifact://22522452249/state-bundle-live-m4-policy-step1-1772288317",
+    "bundle_ref_matches_expected": true,
+    "state_id": "state-live-m4-policy-step1-1772288317",
+    "ratchet_step": 1,
+    "artifact_hash": "sha256:ce34427b053402f909fd247103382175d4e79a34d36010332868e46338af4f1b",
+    "policy_hash": "sha256:3cb7551f69948cdf0f2679a63a56afd26678a1af70828df9abfb32c2e6d15371",
+    "strict_policy_verify": "pass",
+    "state_cap_next_sha256": "a8de24dece66bfc3f18388d446c9f5cb216d1c984a1aa50d429c5f1ac8258f44",
+    "net_cap_next_sha256": "7c3a2900f097a1a5e9b35490b30d8fcf703a6fa17276ba6d31fcd35bc2bf9aa6",
+    "certificate_path": ".swarm/github/collect/live-m4-policy-step1-1772288317/swarm-live-live-m4-policy-step1-1772288317/certificate.json",
+    "policy_path": ".swarm/github/collect/live-m4-policy-step1-1772288317/swarm-live-live-m4-policy-step1-1772288317/policy.json"
+  },
+  "run2": {
+    "run_id": "live-m4-policy-step2-1772288427",
+    "gh_run_id": 22522481452,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22522481452",
+    "bundle_ref": "gh-artifact://22522481452/state-bundle-live-m4-policy-step2-1772288427",
+    "expected_bundle_ref": "gh-artifact://22522481452/state-bundle-live-m4-policy-step2-1772288427",
+    "bundle_ref_matches_expected": true,
+    "state_id": "state-live-m4-policy-step2-1772288427",
+    "ratchet_step": 2,
+    "artifact_hash": "sha256:998352959f3e13750bf2c35bb0c0b719afe26506d8df87c340643d85c7f0a1c7",
+    "policy_hash": "sha256:af7c84efab2f39f2f511aed73279c8963aeb9e8677041357bf0748ead65e6469",
+    "strict_policy_verify": "pass",
+    "state_cap_next_sha256": "16ca137b841c8f1b09db98ee4fc8ccf9b1970d4c74ee40fd8952e6198ba6d06f",
+    "net_cap_next_sha256": "915f5d5e384cce45a851053c019fb696d31e5a5dfdc98875e49efe0417d0f3ba",
+    "certificate_path": ".swarm/github/collect/live-m4-policy-step2-1772288427/swarm-live-live-m4-policy-step2-1772288427/certificate.json",
+    "policy_path": ".swarm/github/collect/live-m4-policy-step2-1772288427/swarm-live-live-m4-policy-step2-1772288427/policy.json"
+  },
+  "assertions": {
+    "ratchet_incremented_by_one": true,
+    "chain_bundle_ref_used_for_step2": true,
+    "both_bundle_refs_match_run_artifacts": true,
+    "strict_policy_verify_passed_both_steps": true
+  }
+}

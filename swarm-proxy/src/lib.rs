@@ -233,14 +233,13 @@ fn handle_provider_data(mut stream: TcpStream, state: Arc<BrokerState>) -> Resul
 fn handle_worker_proxy(mut worker_stream: TcpStream, state: Arc<BrokerState>) -> Result<()> {
     let head = read_http_header(&mut worker_stream, MAX_HTTP_HEADER_BYTES)?;
     let parsed = parse_http_request_head(&head)?;
-    let (session_id, token) = parse_proxy_auth(&parsed.headers).map_err(|err| {
+    let (session_id, token) = parse_proxy_auth(&parsed.headers).inspect_err(|_| {
         let _ = write_http_error(
             &mut worker_stream,
             407,
             "Proxy Authentication Required",
             "missing or invalid Proxy-Authorization",
         );
-        err
     })?;
 
     let provider = {
