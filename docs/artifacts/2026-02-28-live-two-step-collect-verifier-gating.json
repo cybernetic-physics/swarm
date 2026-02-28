@@ -1,0 +1,86 @@
+{
+  "date": "2026-02-28",
+  "executed_at_utc": "2026-02-28T17:24:00Z",
+  "commit": "3d8bee3e806883f266b615442448e5cb7c002367",
+  "workflow_ref": "cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@3d8bee3e806883f266b615442448e5cb7c002367",
+  "owner_repo": "cybernetic-physics/swarm",
+  "run1": {
+    "run_id": "live-auto-two-step1-1772299440",
+    "gh_run_id": 22525389834,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22525389834",
+    "bundle_ref": "gh-artifact://22525389834/state-bundle-live-auto-two-step1-1772299440",
+    "expected_bundle_ref": "gh-artifact://22525389834/state-bundle-live-auto-two-step1-1772299440",
+    "bundle_ref_matches_expected": true,
+    "bundle_sha256": "sha256:61561b89205cfb7cc6b3f7a6fbd04ebc9c9200e6bb220a1e2b5845f0d80ee800",
+    "state_id": "state-live-auto-two-step1-1772299440",
+    "ratchet_step": 1,
+    "artifact_hash": "sha256:f6b1541457f980ed183443a864ac846f8a6d5a5ab307e45303012d685bb462c9",
+    "policy_hash": "sha256:2497906b85baa622c0628e0bf71b86c4d45e2e7bd2d6e67a7400165e3b9aeda8",
+    "verification_ok": true,
+    "verification_reason": "ok",
+    "compatibility_ok": true,
+    "compatibility_reason": "ok",
+    "errors_count": 0,
+    "state_cap_next_sha256": "0c7e23139d64d0a34df8f41e2e44225fd580813ccde74b6410ba4b1f53ce8511",
+    "net_cap_next_sha256": "86fb24560b13625a949e9e8c2f8a8eeeb14a02505c795a7cf631c2d020a5817c",
+    "artifact_report": {
+      "found": [
+        "result.json",
+        "next_tokens.json",
+        "certificate.json",
+        "policy.json"
+      ],
+      "missing": [],
+      "required": [
+        "result.json",
+        "next_tokens.json",
+        "certificate.json",
+        "policy.json"
+      ]
+    }
+  },
+  "run2": {
+    "run_id": "live-auto-two-step2-1772299440",
+    "gh_run_id": 22525394045,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22525394045",
+    "bundle_ref": "gh-artifact://22525394045/state-bundle-live-auto-two-step2-1772299440",
+    "expected_bundle_ref": "gh-artifact://22525394045/state-bundle-live-auto-two-step2-1772299440",
+    "bundle_ref_matches_expected": true,
+    "bundle_sha256": "sha256:d52ee577caa26f72dc3698badb14f7faed0044a48afddb43cfd6c26b652497c3",
+    "state_id": "state-live-auto-two-step2-1772299440",
+    "ratchet_step": 2,
+    "artifact_hash": "sha256:aef7dc096c9fce056737e981155a96e40af39a31cb9fe1ccf2ba24690b5daecb",
+    "policy_hash": "sha256:8766a88273da37b99618a0256d6398575fc566389cacbbc1f1d2b48fbafea80f",
+    "verification_ok": true,
+    "verification_reason": "ok",
+    "compatibility_ok": true,
+    "compatibility_reason": "ok",
+    "errors_count": 0,
+    "state_cap_next_sha256": "9aef80040a35919bb43d76e0f2b7da4543b3b621773cd21f1331faafa2687395",
+    "net_cap_next_sha256": "354c6edc62d67760f15482efc2920e4623333c01804b4ce7dc0b3e7d56d8fcb1",
+    "artifact_report": {
+      "found": [
+        "result.json",
+        "next_tokens.json",
+        "certificate.json",
+        "policy.json"
+      ],
+      "missing": [],
+      "required": [
+        "result.json",
+        "next_tokens.json",
+        "certificate.json",
+        "policy.json"
+      ]
+    }
+  },
+  "assertions": {
+    "step1_verification_ok": true,
+    "step2_verification_ok": true,
+    "step1_errors_empty": true,
+    "step2_errors_empty": true,
+    "step2_used_step1_chain_inputs": true,
+    "ratchet_incremented_by_one": true,
+    "bundle_refs_match_run_artifacts": true
+  }
+}

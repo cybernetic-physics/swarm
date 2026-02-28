@@ -49,6 +49,7 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 - [ ] `swarm init` scaffolding command (similar to `popcorn setup`).
 - [ ] Sample fixtures for local dry-run and GitHub run.
 - [ ] End-to-end tutorial docs.
+- [x] Automated live 2-step GitHub verifier-gated harness (`scripts/live_two_step_chain_verify.sh`) with machine-readable evidence output.
 
 ## Suggested first sprint
 

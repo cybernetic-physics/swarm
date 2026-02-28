@@ -364,3 +364,43 @@ Conclusion:
 Machine-readable test record:
 
 - `docs/artifacts/2026-02-28-live-collect-verifier-gating.json`
+
+## Automated two-step harness (2026-02-28)
+
+To run a live two-step chain test with collect-time verifier gating and strict policy artifact checks in one command:
+
+```bash
+cd /Users/cuboniks/Projects/agent_swarm/swarm
+scripts/live_two_step_chain_verify.sh
+```
+
+What the harness enforces:
+
+- Step 1 dispatch + workflow success + collect success.
+- Step 2 dispatch chained from step 1 (`bundle_ref`, `state_cap_next`, `net_cap_next`) + workflow success + collect success.
+- `verification_ok=true` for both collects.
+- `errors=[]` for both collects.
+- required/found artifacts include:
+  - `result.json`
+  - `next_tokens.json`
+  - `certificate.json`
+  - `policy.json`
+- ratchet increment assertion: `step2.ratchet_step == step1.ratchet_step + 1`.
+- bundle locator assertion for each step:
+  - `gh-artifact://<gh_run_id>/state-bundle-<run_id>`
+
+Latest automated execution in this repo:
+
+- commit: `3d8bee3e806883f266b615442448e5cb7c002367`
+- workflow ref: `cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@3d8bee3e806883f266b615442448e5cb7c002367`
+- step 1:
+  - run_id: `live-auto-two-step1-1772299440`
+  - GitHub run: `22525389834`
+- step 2:
+  - run_id: `live-auto-two-step2-1772299440`
+  - GitHub run: `22525394045`
+- verdict: PASS
+
+Machine-readable test record:
+
+- `docs/artifacts/2026-02-28-live-two-step-collect-verifier-gating.json`
