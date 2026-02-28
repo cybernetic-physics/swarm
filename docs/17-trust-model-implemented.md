@@ -137,22 +137,26 @@ Residual risk:
 Collect behavior (`swarm-cli` GitHub backend):
 - Downloads artifacts for a run (`gh run download`).
 - Requires presence of `result.json` and `next_tokens.json`.
-  - File: `swarm-cli/src/github_backend.rs:569`
+- In default mode, also requires `certificate.json`; when strict policy mode is enabled (default), also requires `policy.json`.
 - Validates minimum shape:
-  - `result.json`: `run_id`, `status`, `restore_mode` with enum check
+  - `result.json`: `run_id`, `status`, `restore_mode` with enum check (+ `artifact_hash` when cert verification is enabled)
   - `next_tokens.json`: `state_cap_next`, `net_cap_next`
-  - File: `swarm-cli/src/github_backend.rs:1098`, `swarm-cli/src/github_backend.rs:1112`
 - Enforces compatibility rule:
   - if `restore_mode == cold_start` and ledger policy is `fail_closed`, collect fails.
-  - File: `swarm-cli/src/github_backend.rs:657`
+- Automatically runs certificate verification in collect path (default):
+  - verifies `artifact_hash == sha256(certificate.json bytes)`
+  - verifies required commit pin matches certificate `runtime.workflow_ref`
+  - verifies policy hash binding when certificate includes policy metadata
+  - strict mode requires policy presence (`require_policy=true` default)
 
 Security effect:
 - Prevents quietly proceeding on missing artifacts.
 - Prevents silent downgrade to cold-start under fail-closed expectations.
+- Prevents successful collect on certificate hash mismatch, commit mismatch, or required-policy mismatch.
 
 Residual risk:
 - Shape validation is intentionally minimal.
-- Collect path does not cryptographically verify artifacts by default.
+- Cert verification can be explicitly bypassed with `--skip-verify-cert` for debugging; production posture should keep default verification enabled.
 
 ## 5) Certificate/proof verification behavior (current verifier reality)
 
@@ -180,11 +184,11 @@ CLI verify interface:
   - File: `swarm-cli/src/main.rs`
 
 Security effect:
-- You get byte-hash binding + commit equality checks when verifier is run.
+- You get byte-hash binding + commit equality checks in explicit `verify cert`, and the same checks are now auto-gated in GitHub collect by default.
 
 Residual risk:
 - No in-code Sigstore/DSSE chain verification today.
-- Verification is not automatically enforced as part of collect/dispatch lifecycle.
+- Verification is enforced in collect by default, but still depends on caller not opting out with `--skip-verify-cert`.
 
 ## 6) Network routing and reverse proxy trust model (`net_cap` + `swarm-proxy`)
 
@@ -240,7 +244,7 @@ Hard trust assumptions:
 - Local machine filesystem/process boundary protects `.swarm` ledgers and capability-bearing artifacts.
 
 Soft trust assumptions:
-- Operators run verifier checks when they need stronger evidence.
+- Operators keep collect-time verifier gating enabled (do not use `--skip-verify-cert` in production flows).
 - Workflow code at pinned commit is audited enough for use case risk.
 
 Not currently trusted via strong crypto inside this repo:
@@ -259,10 +263,10 @@ Guaranteed by current code paths:
 - Verifier can enforce certificate-hash equality + required commit match.
 - Verifier enforces policy hash equality when certificate includes policy metadata, with optional strict policy mode.
 - GitHub workflow emits `artifact_hash` from actual `certificate.json` bytes.
+- GitHub collect path now fail-closes on certificate hash/commit/policy verification failures by default.
 
 Not guaranteed yet:
 - Signed/non-forgeable capability envelopes.
-- Automatic verifier gating in the GitHub collect path.
 - Full cryptographic proof verification for zk attestations in `swarm-verify`.
 - Transport-layer security for broker/provider path.
 
@@ -279,8 +283,8 @@ Not guaranteed yet:
 - Why: token payload is unsigned base64 JSON.
 
 4. Artifact tampering after run
-- Result: collect may still download, but verifier can detect mismatch if caller verifies cert hash/commit.
-- Caveat: this requires explicit verifier usage and correct artifact material.
+- Result: collect fails by default on cert hash/commit/policy mismatch via verifier-gated checks.
+- Caveat: caller can still opt out with `--skip-verify-cert`.
 
 5. Wrong token or missing provider for client-exit proxy
 - Result: policy violation / HTTP error (fail-closed when configured).
@@ -294,11 +298,11 @@ Workspace test run used for this trust-model snapshot:
 - Command: `cargo test --workspace`
 - Date: 2026-02-28
 - Result: pass
-  - `swarm-cli`: 32 tests
-  - `swarm-core`: 8 tests
+  - `swarm-cli`: 36 tests
+  - `swarm-core`: 9 tests
   - `swarm-proxy`: 4 tests
   - `swarm-state`: 6 tests
-  - `swarm-verify`: 9 tests
+  - `swarm-verify`: 15 tests
 
 Notable regression tests covering trust boundaries:
 - `net_cap::tests::policy_mismatch_rejected_for_client_exit_non_proxy_ticket`
@@ -307,6 +311,10 @@ Notable regression tests covering trust boundaries:
 - `github_backend::tests::reject_unpinned_commit`
 - `github_backend::tests::collect_fails_when_required_artifacts_missing`
 - `github_backend::tests::collect_parse_failure_persists_last_error_and_run_id`
+- `github_backend::tests::collect_verifies_certificate_and_policy_by_default`
+- `github_backend::tests::collect_fails_closed_on_certificate_hash_mismatch`
+- `github_backend::tests::collect_fails_closed_when_policy_required_but_missing`
+- `github_backend::tests::collect_fails_closed_on_required_commit_mismatch`
 - `swarm_verify::tests::verify_required_commit_rejects_mismatch`
 - `swarm_verify::tests::verify_proof_file_rejects_hash_mismatch`
 - `swarm_state::tests::deterministic_resume_artifacts_are_byte_stable_and_ratchet`
@@ -316,7 +324,7 @@ Notable regression tests covering trust boundaries:
 `swarm` currently implements a pragmatic, fail-closed-in-key-spots orchestration trust model:
 - strong operational checks for pinning, artifact presence, policy mismatch,
 - deterministic ratchet/chaining behavior for state continuity,
-- optional local verification primitives for hash/commit binding.
+- collect-time verifier gating by default for hash/commit/policy binding.
 
 It is not yet a fully cryptographic remote-attestation trust model. The largest current gap is that capability authenticity and attestation proof validity are not enforced end-to-end by cryptographic verification in the runtime path.
 
@@ -326,6 +334,6 @@ When auditing a run today, check in this order:
 1. `workflow_ref` pin and workflow commit check are present and succeeded.
 2. `result.json` + `next_tokens.json` exist and match expected run context.
 3. Restore mode did not violate fail-closed expectations.
-4. If assurance needed, run verifier on certificate hash + required commit.
+4. Confirm collect reported `verification_ok=true` (or run explicit verifier for independent confirmation).
 5. For client-exit mode, verify ticket mode/expiry and broker/provider token match behavior.
 6. Treat all capability tokens as high-sensitivity bearer secrets.

@@ -21,6 +21,7 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 - [x] Add timeout/retry/cancel policy to backend adapters.
 - [x] Add machine-readable error taxonomy and stable exit codes.
 - [x] Add conformance tests for deterministic artifacts across repeated runs.
+- [x] Add automatic collect-time certificate verification gate (hash + commit + policy, fail-closed by default).
 - [ ] (postponed) Add storage adapters (local + S3) with manifest integrity checks.
   - Decision (2026-02-28): keep GitHub Artifacts as the default storage path for Phase 0/1 live testing and MVP hardening.
   - Revisit when artifact retention/size/cross-repo portability constraints materially block operations.

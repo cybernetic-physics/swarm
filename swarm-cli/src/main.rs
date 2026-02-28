@@ -268,6 +268,10 @@ enum GithubBackendCmd {
         out_dir: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long)]
+        skip_verify_cert: bool,
+        #[arg(long, default_value_t = true)]
+        require_policy: bool,
         #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
         max_attempts: u32,
         #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
@@ -700,10 +704,12 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     workflow_ref,
                     out_dir,
                     dry_run,
+                    skip_verify_cert,
+                    require_policy,
                     max_attempts,
                     timeout_secs,
                 } => {
-                    let collected = github_backend::collect_run_with_policy(
+                    let collected = github_backend::collect_run_with_policy_and_verify(
                         &cwd()?,
                         &run_id,
                         gh_run_id,
@@ -711,6 +717,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                         out_dir.as_deref(),
                         dry_run,
                         &gh_policy(max_attempts, timeout_secs),
+                        !skip_verify_cert,
+                        require_policy,
                     )?;
                     Ok(success(
                         "github collect handled",

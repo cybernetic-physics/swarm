@@ -10,6 +10,7 @@ use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 use swarm_core::{RouteMode, RunSpec};
+use swarm_verify::verify_certificate_file_with_policy;
 
 pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
 pub const DEFAULT_TIMEOUT_SECS: u64 = 45;
@@ -122,6 +123,8 @@ struct CollectOptions<'a> {
     dry_run: bool,
     policy: &'a GhCommandPolicy,
     gh_binary: &'a Path,
+    verify_certificate: bool,
+    require_policy: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -209,6 +212,10 @@ pub struct CollectResult {
     pub restore_mode: Option<String>,
     pub compatibility_ok: bool,
     pub compatibility_reason: String,
+    pub certificate_ref: Option<String>,
+    pub policy_ref: Option<String>,
+    pub verification_ok: bool,
+    pub verification_reason: String,
     pub artifact_report: ArtifactReport,
     pub errors: Vec<GithubErrorInfo>,
     pub attempts_used: u32,
@@ -479,7 +486,7 @@ pub fn collect_run(
     out_dir: Option<&Path>,
     dry_run: bool,
 ) -> Result<CollectResult> {
-    collect_run_with_policy(
+    collect_run_with_policy_and_verify(
         cwd,
         run_id,
         gh_run_id,
@@ -487,9 +494,12 @@ pub fn collect_run(
         out_dir,
         dry_run,
         &GhCommandPolicy::default(),
+        true,
+        true,
     )
 }
 
+#[allow(dead_code)]
 pub fn collect_run_with_policy(
     cwd: &Path,
     run_id: &str,
@@ -499,12 +509,39 @@ pub fn collect_run_with_policy(
     dry_run: bool,
     policy: &GhCommandPolicy,
 ) -> Result<CollectResult> {
+    collect_run_with_policy_and_verify(
+        cwd,
+        run_id,
+        gh_run_id,
+        workflow_ref,
+        out_dir,
+        dry_run,
+        policy,
+        true,
+        true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn collect_run_with_policy_and_verify(
+    cwd: &Path,
+    run_id: &str,
+    gh_run_id: u64,
+    workflow_ref: Option<&str>,
+    out_dir: Option<&Path>,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+    verify_certificate: bool,
+    require_policy: bool,
+) -> Result<CollectResult> {
     let options = CollectOptions {
         workflow_ref,
         out_dir,
         dry_run,
         policy,
         gh_binary: Path::new("gh"),
+        verify_certificate,
+        require_policy,
     };
     collect_run_internal(cwd, run_id, gh_run_id, &options)
 }
@@ -536,8 +573,27 @@ fn collect_run_internal(
     let mut restore_mode = None;
     let mut compatibility_ok = true;
     let mut compatibility_reason = "ok".to_string();
+    let mut certificate_ref = None;
+    let mut policy_ref = None;
+    let mut verification_ok = !options.verify_certificate || options.dry_run;
+    let mut verification_reason = if options.dry_run {
+        "skipped in dry_run mode".to_string()
+    } else if options.verify_certificate {
+        "pending".to_string()
+    } else {
+        "disabled by collect option".to_string()
+    };
+    let mut expected_artifact_hash: Option<String> = None;
     let mut errors: Vec<GithubErrorInfo> = vec![];
     let mut artifact_report = ArtifactReport::empty();
+    if options.verify_certificate {
+        artifact_report
+            .required
+            .push("certificate.json".to_string());
+        if options.require_policy {
+            artifact_report.required.push("policy.json".to_string());
+        }
+    }
     let mut attempts_used = 0;
 
     let cmd = vec![
@@ -613,6 +669,20 @@ fn collect_run_internal(
                         .get("restore_mode")
                         .and_then(Value::as_str)
                         .map(ToString::to_string);
+                    if options.verify_certificate {
+                        match require_string_field(
+                            &result_json,
+                            "artifact_hash",
+                            "ARTIFACT_RESULT_SCHEMA_INVALID",
+                        ) {
+                            Ok(value) => expected_artifact_hash = Some(value.to_string()),
+                            Err(err) => {
+                                if let Some(info) = backend_error_info_from_anyhow(&err) {
+                                    errors.push(info);
+                                }
+                            }
+                        }
+                    }
 
                     let local_run_dir = cwd.join(".swarm").join("local").join("runs").join(run_id);
                     fs::create_dir_all(&local_run_dir)?;
@@ -669,6 +739,106 @@ fn collect_run_internal(
                 );
             }
         }
+
+        if options.verify_certificate {
+            if errors.is_empty() {
+                let certificate_path = find_first_file_named(&download_dir, "certificate.json");
+                match certificate_path {
+                    Some(path) => {
+                        artifact_report.found.push("certificate.json".to_string());
+                        let local_run_dir =
+                            cwd.join(".swarm").join("local").join("runs").join(run_id);
+                        fs::create_dir_all(&local_run_dir)?;
+
+                        let cert_dest = local_run_dir.join("certificate.json");
+                        fs::copy(path, &cert_dest)?;
+                        certificate_ref = Some(local_ref(cwd, &cert_dest));
+
+                        let policy_source = find_first_file_named(&download_dir, "policy.json");
+                        let policy_dest = if let Some(policy_path) = policy_source {
+                            artifact_report.found.push("policy.json".to_string());
+                            let dest = local_run_dir.join("policy.json");
+                            fs::copy(policy_path, &dest)?;
+                            policy_ref = Some(local_ref(cwd, &dest));
+                            Some(dest)
+                        } else {
+                            None
+                        };
+
+                        if options.require_policy && policy_dest.is_none() {
+                            verification_ok = false;
+                            verification_reason =
+                                "required artifact policy.json is missing".to_string();
+                            artifact_report.missing.push("policy.json".to_string());
+                            errors.push(
+                                GithubBackendError::artifact(
+                                    "ARTIFACT_MISSING_POLICY",
+                                    verification_reason.clone(),
+                                )
+                                .info()
+                                .clone(),
+                            );
+                        } else if let Some(expected_hash) = expected_artifact_hash.as_deref() {
+                            match verify_certificate_file_with_policy(
+                                &cert_dest,
+                                expected_hash,
+                                &ledger.commit_sha,
+                                policy_dest.as_deref(),
+                                options.require_policy,
+                            ) {
+                                Ok(_) => {
+                                    verification_ok = true;
+                                    verification_reason = "ok".to_string();
+                                }
+                                Err(err) => {
+                                    verification_ok = false;
+                                    verification_reason = err.to_string();
+                                    errors.push(
+                                        GithubBackendError::artifact(
+                                            "ARTIFACT_CERT_VERIFY_FAILED",
+                                            format!("certificate verification failed: {err}"),
+                                        )
+                                        .info()
+                                        .clone(),
+                                    );
+                                }
+                            }
+                        } else {
+                            verification_ok = false;
+                            verification_reason =
+                                "result.json is missing artifact_hash required for verification"
+                                    .to_string();
+                            errors.push(
+                                GithubBackendError::artifact(
+                                    "ARTIFACT_RESULT_MISSING_HASH",
+                                    verification_reason.clone(),
+                                )
+                                .info()
+                                .clone(),
+                            );
+                        }
+                    }
+                    None => {
+                        verification_ok = false;
+                        verification_reason =
+                            "required artifact certificate.json is missing".to_string();
+                        artifact_report.missing.push("certificate.json".to_string());
+                        errors.push(
+                            GithubBackendError::artifact(
+                                "ARTIFACT_MISSING_CERTIFICATE",
+                                verification_reason.clone(),
+                            )
+                            .info()
+                            .clone(),
+                        );
+                    }
+                }
+            } else {
+                verification_ok = false;
+                verification_reason =
+                    "skipped due to earlier artifact validation failure".to_string();
+            }
+        }
     }
 
     ledger.last_error = errors.first().cloned();
@@ -687,6 +857,10 @@ fn collect_run_internal(
         restore_mode,
         compatibility_ok,
         compatibility_reason,
+        certificate_ref,
+        policy_ref,
+        verification_ok,
+        verification_reason,
         artifact_report,
         errors,
         attempts_used,
@@ -1198,9 +1372,14 @@ mod tests {
     use serde_json::{Value, json};
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
     use std::path::PathBuf;
     use swarm_core::{Backend, RouteMode, RunSpec};
+    use swarm_verify::hash_certificate_bytes;
     use tempfile::TempDir;
+
+    const CERTIFICATE_FIXTURE: &str =
+        include_str!("../../fixtures/contracts/certificate.valid.json");
 
     fn sample_workflow_ref() -> &'static str {
         "owner/repo/.github/workflows/loom-paid-run.yml@1234567890abcdef1234567890abcdef12345678"
@@ -1596,6 +1775,99 @@ mod tests {
         gh_path
     }
 
+    fn write_collect_fixture_copy_script(dir: &TempDir, fixture_dir: &Path) -> PathBuf {
+        write_fake_gh_script(
+            dir,
+            &format!(
+                r#"#!/bin/sh
+set -eu
+out_dir=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "-D" ]; then
+    shift
+    out_dir="$1"
+    break
+  fi
+  shift
+done
+mkdir -p "$out_dir/artifact"
+for file in result.json next_tokens.json certificate.json policy.json; do
+  if [ -f "{fixture_dir}/$file" ]; then
+    cp "{fixture_dir}/$file" "$out_dir/artifact/$file"
+  fi
+done
+exit 0
+"#,
+                fixture_dir = fixture_dir.display()
+            ),
+        )
+    }
+
+    fn write_collect_fixture_artifacts(
+        root: &Path,
+        run_id: &str,
+        commit_sha: &str,
+        include_policy_file: bool,
+        mismatched_artifact_hash: bool,
+        override_cert_commit: Option<&str>,
+    ) {
+        let policy_bytes = serde_json::to_vec_pretty(&json!({
+            "schema_version": "agent_swarm-policy-v1",
+            "run_id": run_id,
+            "route_mode": "direct"
+        }))
+        .expect("serialize policy fixture");
+        let mut policy_bytes = policy_bytes;
+        policy_bytes.push(b'\n');
+
+        let mut cert: Value =
+            serde_json::from_str(CERTIFICATE_FIXTURE).expect("parse cert fixture");
+        cert["job_id"] = json!(run_id);
+        cert["runtime"]["workflow_ref"] = json!(format!(
+            "owner/repo/.github/workflows/loom-paid-run.yml@{}",
+            override_cert_commit.unwrap_or(commit_sha)
+        ));
+        cert["policy"] = json!({
+            "schema_version": "agent_swarm-policy-v1",
+            "policy_hash": hash_certificate_bytes(&policy_bytes),
+            "policy_ref": format!("artifact://swarm-live-{run_id}/policy.json"),
+            "policy_generated_at": "2026-02-28T12:00:20Z"
+        });
+        let mut cert_bytes = serde_json::to_vec_pretty(&cert).expect("serialize cert fixture");
+        cert_bytes.push(b'\n');
+
+        let artifact_hash = if mismatched_artifact_hash {
+            "sha256:deadbeef".to_string()
+        } else {
+            hash_certificate_bytes(&cert_bytes)
+        };
+
+        fs::write(
+            root.join("result.json"),
+            serde_json::to_vec_pretty(&json!({
+                "run_id": run_id,
+                "status": "succeeded",
+                "restore_mode": "checkpoint",
+                "artifact_hash": artifact_hash,
+            }))
+            .expect("serialize result"),
+        )
+        .expect("write result");
+        fs::write(
+            root.join("next_tokens.json"),
+            serde_json::to_vec_pretty(&json!({
+                "state_cap_next": "state-cap-next",
+                "net_cap_next": "net-cap-next",
+            }))
+            .expect("serialize next tokens"),
+        )
+        .expect("write next tokens");
+        fs::write(root.join("certificate.json"), cert_bytes).expect("write certificate");
+        if include_policy_file {
+            fs::write(root.join("policy.json"), policy_bytes).expect("write policy");
+        }
+    }
+
     #[test]
     fn dispatch_retries_on_transient_failure_then_succeeds() {
         let cwd = TempDir::new().expect("temp dir");
@@ -1755,6 +2027,8 @@ exit 0
             dry_run: false,
             policy: &collect_policy,
             gh_binary: &gh,
+            verify_certificate: false,
+            require_policy: false,
         };
         let err = collect_run_internal(cwd.path(), "collect-missing", 77, &collect_options)
             .expect_err("missing artifacts should fail");
@@ -1832,6 +2106,8 @@ exit 0
             dry_run: false,
             policy: &collect_policy,
             gh_binary: &gh,
+            verify_certificate: false,
+            require_policy: false,
         };
         let err = collect_run_internal(cwd.path(), "collect-parse-failure", 321, &collect_options)
             .expect_err("invalid result schema should fail");
@@ -1851,5 +2127,209 @@ exit 0
         assert_eq!(ledger.gh_run_id, Some(321));
         let last_error = ledger.last_error.expect("last error should be persisted");
         assert_eq!(last_error.code, "ARTIFACT_RESULT_SCHEMA_INVALID");
+    }
+
+    #[test]
+    fn collect_verifies_certificate_and_policy_by_default() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let fixture = TempDir::new().expect("fixture dir");
+
+        let spec = sample_spec("collect-verify-success");
+        write_collect_fixture_artifacts(
+            fixture.path(),
+            &spec.run_id,
+            "1234567890abcdef1234567890abcdef12345678",
+            true,
+            false,
+            None,
+        );
+
+        let gh = write_collect_fixture_copy_script(&tools, fixture.path());
+        let dispatch_options = DispatchOptions {
+            allow_cold_start: false,
+            agent_image: "image",
+            agent_step: "step",
+            dry_run: true,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
+        };
+        dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
+
+        let collect_options = CollectOptions {
+            workflow_ref: None,
+            out_dir: None,
+            dry_run: false,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            verify_certificate: true,
+            require_policy: true,
+        };
+
+        let out = collect_run_internal(cwd.path(), &spec.run_id, 888, &collect_options)
+            .expect("collect should verify cert and policy");
+        assert!(out.verification_ok);
+        assert_eq!(out.verification_reason, "ok");
+        assert!(out.certificate_ref.is_some());
+        assert!(out.policy_ref.is_some());
+        assert!(
+            out.artifact_report
+                .found
+                .contains(&"certificate.json".to_string())
+        );
+        assert!(
+            out.artifact_report
+                .found
+                .contains(&"policy.json".to_string())
+        );
+    }
+
+    #[test]
+    fn collect_fails_closed_on_certificate_hash_mismatch() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let fixture = TempDir::new().expect("fixture dir");
+
+        let spec = sample_spec("collect-verify-hash-mismatch");
+        write_collect_fixture_artifacts(
+            fixture.path(),
+            &spec.run_id,
+            "1234567890abcdef1234567890abcdef12345678",
+            true,
+            true,
+            None,
+        );
+
+        let gh = write_collect_fixture_copy_script(&tools, fixture.path());
+        let dispatch_options = DispatchOptions {
+            allow_cold_start: false,
+            agent_image: "image",
+            agent_step: "step",
+            dry_run: true,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
+        };
+        dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
+
+        let collect_options = CollectOptions {
+            workflow_ref: None,
+            out_dir: None,
+            dry_run: false,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            verify_certificate: true,
+            require_policy: true,
+        };
+        let err = collect_run_internal(cwd.path(), &spec.run_id, 889, &collect_options)
+            .expect_err("collect should fail on hash mismatch");
+        let backend_err = err
+            .downcast_ref::<GithubBackendError>()
+            .expect("typed backend error");
+        assert_eq!(backend_err.info().code, "ARTIFACT_CERT_VERIFY_FAILED");
+
+        let ledger: GithubRunLedger = read_json(
+            &cwd.path()
+                .join(".swarm")
+                .join("github")
+                .join("runs")
+                .join(format!("{}.json", spec.run_id)),
+        )
+        .expect("ledger json");
+        assert_eq!(
+            ledger.last_error.expect("persisted error").code,
+            "ARTIFACT_CERT_VERIFY_FAILED"
+        );
+    }
+
+    #[test]
+    fn collect_fails_closed_when_policy_required_but_missing() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let fixture = TempDir::new().expect("fixture dir");
+
+        let spec = sample_spec("collect-verify-policy-missing");
+        write_collect_fixture_artifacts(
+            fixture.path(),
+            &spec.run_id,
+            "1234567890abcdef1234567890abcdef12345678",
+            false,
+            false,
+            None,
+        );
+
+        let gh = write_collect_fixture_copy_script(&tools, fixture.path());
+        let dispatch_options = DispatchOptions {
+            allow_cold_start: false,
+            agent_image: "image",
+            agent_step: "step",
+            dry_run: true,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
+        };
+        dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
+
+        let collect_options = CollectOptions {
+            workflow_ref: None,
+            out_dir: None,
+            dry_run: false,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            verify_certificate: true,
+            require_policy: true,
+        };
+        let err = collect_run_internal(cwd.path(), &spec.run_id, 890, &collect_options)
+            .expect_err("collect should fail when policy is required but missing");
+        let backend_err = err
+            .downcast_ref::<GithubBackendError>()
+            .expect("typed backend error");
+        assert_eq!(backend_err.info().code, "ARTIFACT_MISSING_POLICY");
+    }
+
+    #[test]
+    fn collect_fails_closed_on_required_commit_mismatch() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let fixture = TempDir::new().expect("fixture dir");
+
+        let spec = sample_spec("collect-verify-commit-mismatch");
+        write_collect_fixture_artifacts(
+            fixture.path(),
+            &spec.run_id,
+            "1234567890abcdef1234567890abcdef12345678",
+            true,
+            false,
+            Some("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
+        );
+
+        let gh = write_collect_fixture_copy_script(&tools, fixture.path());
+        let dispatch_options = DispatchOptions {
+            allow_cold_start: false,
+            agent_image: "image",
+            agent_step: "step",
+            dry_run: true,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            dispatch_inputs: DispatchInputOverrides::default(),
+        };
+        dispatch_run_internal(cwd.path(), &spec, &dispatch_options).expect("seed ledger");
+
+        let collect_options = CollectOptions {
+            workflow_ref: None,
+            out_dir: None,
+            dry_run: false,
+            policy: &GhCommandPolicy::default(),
+            gh_binary: &gh,
+            verify_certificate: true,
+            require_policy: true,
+        };
+        let err = collect_run_internal(cwd.path(), &spec.run_id, 891, &collect_options)
+            .expect_err("collect should fail on commit mismatch");
+        let backend_err = err
+            .downcast_ref::<GithubBackendError>()
+            .expect("typed backend error");
+        assert_eq!(backend_err.info().code, "ARTIFACT_CERT_VERIFY_FAILED");
     }
 }
