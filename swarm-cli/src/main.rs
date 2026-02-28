@@ -13,6 +13,14 @@ use swarm_verify::verify_certificate_file;
 
 const DEFAULT_AGENT_IMAGE: &str = "ghcr.io/example/swarm-agent:latest";
 const DEFAULT_AGENT_STEP: &str = "echo swarm m2 dispatch";
+const DEFAULT_GH_MAX_ATTEMPTS: u32 = github_backend::DEFAULT_MAX_ATTEMPTS;
+const DEFAULT_GH_TIMEOUT_SECS: u64 = github_backend::DEFAULT_TIMEOUT_SECS;
+
+const EXIT_INVALID_INPUT: i32 = 2;
+const EXIT_VERIFICATION_FAILED: i32 = 3;
+const EXIT_BACKEND_FAILURE: i32 = 4;
+const EXIT_RESTORE_FAILURE: i32 = 5;
+const EXIT_POLICY_VIOLATION: i32 = 6;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -98,6 +106,10 @@ enum RunCmd {
         agent_step: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
+        max_attempts: u32,
+        #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
+        timeout_secs: u64,
     },
     Resume {
         #[arg(long)]
@@ -116,6 +128,10 @@ enum RunCmd {
         agent_step: Option<String>,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
+        max_attempts: u32,
+        #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
+        timeout_secs: u64,
     },
     Fork {
         #[arg(long)]
@@ -132,6 +148,18 @@ enum RunCmd {
         run_id: String,
         #[arg(long)]
         follow: bool,
+    },
+    Cancel {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        gh_run_id: Option<u64>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
+        max_attempts: u32,
+        #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
+        timeout_secs: u64,
     },
 }
 
@@ -196,6 +224,10 @@ enum GithubBackendCmd {
         agent_step: String,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
+        max_attempts: u32,
+        #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
+        timeout_secs: u64,
     },
     Collect {
         #[arg(long)]
@@ -208,6 +240,22 @@ enum GithubBackendCmd {
         out_dir: Option<PathBuf>,
         #[arg(long)]
         dry_run: bool,
+        #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
+        max_attempts: u32,
+        #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
+        timeout_secs: u64,
+    },
+    Cancel {
+        #[arg(long)]
+        run_id: String,
+        #[arg(long)]
+        gh_run_id: Option<u64>,
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long, default_value_t = DEFAULT_GH_MAX_ATTEMPTS)]
+        max_attempts: u32,
+        #[arg(long, default_value_t = DEFAULT_GH_TIMEOUT_SECS)]
+        timeout_secs: u64,
     },
 }
 
@@ -264,17 +312,21 @@ struct SwarmConfig {
 }
 
 fn main() {
-    if let Err(err) = run() {
-        eprintln!("error: {err}");
-        std::process::exit(1);
-    }
-}
-
-fn run() -> Result<()> {
     let cli = Cli::parse();
     let json_output = cli.json;
-    let result = execute(cli)?;
-    render(result, json_output)
+    match execute(cli) {
+        Ok(result) => {
+            if let Err(err) = render(result, json_output) {
+                eprintln!("error: {err}");
+                std::process::exit(1);
+            }
+        }
+        Err(err) => {
+            let code = classify_exit_code(&err);
+            render_error(&err, json_output, code);
+            std::process::exit(code);
+        }
+    }
 }
 
 fn execute(cli: Cli) -> Result<CliResult> {
@@ -299,11 +351,13 @@ fn execute(cli: Cli) -> Result<CliResult> {
             let exists = path.exists();
             let cfg = load_config().unwrap_or_default();
             let engine = local_engine()?;
+            let github_checks = github_backend::doctor_checks(&cwd()?, cfg.workflow_ref.as_deref());
             let checks = json!({
                 "config_exists": exists,
                 "config_path": path,
                 "workflow_ref_set": cfg.workflow_ref.is_some(),
                 "local_engine_root": engine.resolve_local_ref("local://"),
+                "github": github_checks,
             });
             Ok(success("doctor checks complete", checks))
         }
@@ -339,6 +393,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 agent_image,
                 agent_step,
                 dry_run,
+                max_attempts,
+                timeout_secs,
             } => {
                 let backend_core = to_backend(backend);
                 let workflow_ref =
@@ -360,13 +416,15 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 }
 
                 if matches!(backend_core, Backend::Github) {
-                    let dispatched = github_backend::dispatch_run(
+                    let policy = gh_policy(max_attempts, timeout_secs);
+                    let dispatched = github_backend::dispatch_run_with_policy(
                         &cwd()?,
                         &spec,
                         allow_cold_start,
                         agent_image.as_deref().unwrap_or(DEFAULT_AGENT_IMAGE),
                         agent_step.as_deref().unwrap_or(DEFAULT_AGENT_STEP),
                         dry_run,
+                        &policy,
                     )?;
                     return Ok(success(
                         "github launch dispatch prepared",
@@ -388,6 +446,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 agent_image,
                 agent_step,
                 dry_run,
+                max_attempts,
+                timeout_secs,
             } => {
                 let backend_core = to_backend(backend);
                 let workflow_ref =
@@ -409,13 +469,15 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 }
 
                 if matches!(backend_core, Backend::Github) {
-                    let dispatched = github_backend::dispatch_run(
+                    let policy = gh_policy(max_attempts, timeout_secs);
+                    let dispatched = github_backend::dispatch_run_with_policy(
                         &cwd()?,
                         &spec,
                         allow_cold_start,
                         agent_image.as_deref().unwrap_or(DEFAULT_AGENT_IMAGE),
                         agent_step.as_deref().unwrap_or(DEFAULT_AGENT_STEP),
                         dry_run,
+                        &policy,
                     )?;
                     return Ok(success(
                         "github resume dispatch prepared",
@@ -451,6 +513,25 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     json!({ "follow": follow, "local": local_hint, "github": github_hint }),
                 ))
             }
+            RunCmd::Cancel {
+                run_id,
+                gh_run_id,
+                dry_run,
+                max_attempts,
+                timeout_secs,
+            } => {
+                let canceled = github_backend::cancel_run(
+                    &cwd()?,
+                    &run_id,
+                    gh_run_id,
+                    dry_run,
+                    &gh_policy(max_attempts, timeout_secs),
+                )?;
+                Ok(success(
+                    "github cancel handled",
+                    serde_json::to_value(canceled)?,
+                ))
+            }
         },
         Commands::State { command } => match command {
             StateCmd::Inspect { state_id } => {
@@ -476,7 +557,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     &certificate,
                     &expected_artifact_hash,
                     &required_commit,
-                )?;
+                )
+                .map_err(|err| anyhow!("VERIFY_CERT_FAILED: {err}"))?;
                 Ok(success(
                     "certificate verification passed",
                     json!({
@@ -504,6 +586,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     agent_image,
                     agent_step,
                     dry_run,
+                    max_attempts,
+                    timeout_secs,
                 } => {
                     let spec = RunSpec {
                         run_id,
@@ -512,13 +596,14 @@ fn execute(cli: Cli) -> Result<CliResult> {
                         route_mode: to_route_mode(route_mode),
                         workflow_ref: Some(workflow_ref),
                     };
-                    let dispatched = github_backend::dispatch_run(
+                    let dispatched = github_backend::dispatch_run_with_policy(
                         &cwd()?,
                         &spec,
                         allow_cold_start,
                         &agent_image,
                         &agent_step,
                         dry_run,
+                        &gh_policy(max_attempts, timeout_secs),
                     )?;
                     Ok(success(
                         "github dispatch handled",
@@ -531,18 +616,40 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     workflow_ref,
                     out_dir,
                     dry_run,
+                    max_attempts,
+                    timeout_secs,
                 } => {
-                    let collected = github_backend::collect_run(
+                    let collected = github_backend::collect_run_with_policy(
                         &cwd()?,
                         &run_id,
                         gh_run_id,
                         workflow_ref.as_deref(),
                         out_dir.as_deref(),
                         dry_run,
+                        &gh_policy(max_attempts, timeout_secs),
                     )?;
                     Ok(success(
                         "github collect handled",
                         serde_json::to_value(collected)?,
+                    ))
+                }
+                GithubBackendCmd::Cancel {
+                    run_id,
+                    gh_run_id,
+                    dry_run,
+                    max_attempts,
+                    timeout_secs,
+                } => {
+                    let canceled = github_backend::cancel_run(
+                        &cwd()?,
+                        &run_id,
+                        gh_run_id,
+                        dry_run,
+                        &gh_policy(max_attempts, timeout_secs),
+                    )?;
+                    Ok(success(
+                        "github cancel handled",
+                        serde_json::to_value(canceled)?,
                     ))
                 }
             },
@@ -627,6 +734,58 @@ fn render(result: CliResult, json_output: bool) -> Result<()> {
     Ok(())
 }
 
+fn render_error(err: &anyhow::Error, json_output: bool, code: i32) {
+    if json_output {
+        if let Some(backend_err) = err.downcast_ref::<github_backend::GithubBackendError>() {
+            let payload = json!({
+                "status": "error",
+                "code": code,
+                "error": backend_err.info(),
+                "message": err.to_string(),
+            });
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
+            );
+            return;
+        }
+        let payload = json!({
+            "status": "error",
+            "code": code,
+            "message": err.to_string(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&payload).unwrap_or_else(|_| payload.to_string())
+        );
+    } else {
+        eprintln!("error: {err}");
+    }
+}
+
+fn classify_exit_code(err: &anyhow::Error) -> i32 {
+    if let Some(backend_err) = err.downcast_ref::<github_backend::GithubBackendError>() {
+        return match backend_err.info().category.as_str() {
+            "validation" => EXIT_INVALID_INPUT,
+            "compatibility" => EXIT_RESTORE_FAILURE,
+            "policy" => EXIT_POLICY_VIOLATION,
+            "dispatch" | "collect" | "cancel" | "dependency" | "timeout" | "artifact" => {
+                EXIT_BACKEND_FAILURE
+            }
+            _ => 1,
+        };
+    }
+
+    let msg = err.to_string();
+    if msg.starts_with("VERIFY_CERT_FAILED:") {
+        EXIT_VERIFICATION_FAILED
+    } else if msg.contains("unsupported key") {
+        EXIT_INVALID_INPUT
+    } else {
+        1
+    }
+}
+
 fn config_path() -> Result<PathBuf> {
     let home = std::env::var("HOME").map_err(|_| anyhow!("HOME is not set"))?;
     Ok(Path::new(&home).join(".swarm").join("config.json"))
@@ -689,5 +848,13 @@ fn to_route_mode(value: RouteModeArg) -> RouteMode {
     match value {
         RouteModeArg::Direct => RouteMode::Direct,
         RouteModeArg::ClientExit => RouteMode::ClientExit,
+    }
+}
+
+fn gh_policy(max_attempts: u32, timeout_secs: u64) -> github_backend::GhCommandPolicy {
+    github_backend::GhCommandPolicy {
+        max_attempts,
+        timeout_secs,
+        retry_backoff_ms: 250,
     }
 }

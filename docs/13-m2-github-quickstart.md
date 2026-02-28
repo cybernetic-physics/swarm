@@ -1,6 +1,6 @@
 # M2 quickstart (GitHub backend)
 
-Status: current scaffold
+Status: current (M2 + M2b)
 Date: 2026-02-28
 
 This quickstart covers the implemented M2 GitHub adapter path:
@@ -9,6 +9,10 @@ This quickstart covers the implemented M2 GitHub adapter path:
 - run ledger tracking under `.swarm/github/runs`,
 - collection workflow via `gh run download`,
 - restore-mode compatibility policy checks (`checkpoint` vs `cold_start`).
+and M2b hardening:
+- retry/timeout policy flags,
+- artifact schema guards,
+- cancel behavior and run status updates.
 
 Run from:
 
@@ -58,6 +62,8 @@ cargo run -p swarm-cli -- backend github dispatch \
   --run-id m2-github-launch \
   --workflow-ref owner/repo/.github/workflows/loom-paid-run.yml@1234567890abcdef1234567890abcdef12345678 \
   --allow-cold-start \
+  --max-attempts 3 \
+  --timeout-secs 45 \
   --json
 ```
 
@@ -68,6 +74,8 @@ cargo run -p swarm-cli -- backend github collect \
   --run-id m2-github-launch \
   --gh-run-id <GH_RUN_ID> \
   --workflow-ref owner/repo/.github/workflows/loom-paid-run.yml@1234567890abcdef1234567890abcdef12345678 \
+  --max-attempts 3 \
+  --timeout-secs 45 \
   --json
 ```
 
@@ -97,6 +105,27 @@ Dispatch records fallback policy in ledger:
 
 During collect:
 - if `result.json` reports `restore_mode = cold_start` and policy is `fail_closed`, compatibility check fails.
+- if required artifacts are missing or schema-invalid, collect fails with typed artifact errors.
+
+## 5) Cancel a GitHub run
+
+```bash
+cargo run -p swarm-cli -- run cancel \
+  --run-id m2-github-launch \
+  --gh-run-id <GH_RUN_ID> \
+  --max-attempts 3 \
+  --timeout-secs 30 \
+  --json
+```
+
+Or backend form:
+
+```bash
+cargo run -p swarm-cli -- backend github cancel \
+  --run-id m2-github-launch \
+  --gh-run-id <GH_RUN_ID> \
+  --json
+```
 
 ## Strict pin enforcement
 

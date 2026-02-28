@@ -1,6 +1,6 @@
 # swarm
 
-Status: planning + M1 local backend + M2 GitHub adapter scaffold
+Status: planning + M1 local backend + M2 GitHub adapter + M2b hardening
 Last updated: 2026-02-28
 
 `swarm` is the new CLI-first project under `/Users/cuboniks/Projects/agent_swarm/swarm`.
@@ -27,9 +27,15 @@ Implemented now:
   - collection path via `gh run download`,
   - `.swarm/github` run ledger,
   - restore fallback compatibility check on collected result artifacts.
+- M2b operations hardening:
+  - retry + timeout policy controls for dispatch/collect/cancel,
+  - `run cancel` and `backend github cancel` command paths,
+  - artifact schema guards for `result.json` and `next_tokens.json`,
+  - machine-readable GitHub backend error taxonomy + stable exit code mapping,
+  - expanded `doctor` diagnostics for GitHub CLI/auth/workflow pin validity.
 
 Not implemented yet:
-- Full M2 production hardening (run-id to GH run correlation automation, artifact schema guards, retries/timeout policy).
+- run-id to GH run correlation automation after dispatch.
 - M3 `net_cap` proxy mode.
 - M5 GitLab parity backend.
 

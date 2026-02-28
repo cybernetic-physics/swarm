@@ -1,11 +1,118 @@
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::error::Error;
 use std::ffi::OsStr;
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use swarm_core::{RouteMode, RunSpec};
+
+pub const DEFAULT_MAX_ATTEMPTS: u32 = 3;
+pub const DEFAULT_TIMEOUT_SECS: u64 = 45;
+const DEFAULT_RETRY_BACKOFF_MS: u64 = 250;
+
+fn default_max_attempts() -> u32 {
+    DEFAULT_MAX_ATTEMPTS
+}
+
+fn default_timeout_secs() -> u64 {
+    DEFAULT_TIMEOUT_SECS
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GithubErrorInfo {
+    pub code: String,
+    pub category: String,
+    pub retryable: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct GithubBackendError {
+    info: GithubErrorInfo,
+}
+
+impl GithubBackendError {
+    pub fn validation(code: &str, message: impl Into<String>) -> Self {
+        Self::new(code, "validation", false, message)
+    }
+
+    pub fn dependency(code: &str, message: impl Into<String>) -> Self {
+        Self::new(code, "dependency", false, message)
+    }
+
+    pub fn dispatch(code: &str, retryable: bool, message: impl Into<String>) -> Self {
+        Self::new(code, "dispatch", retryable, message)
+    }
+
+    pub fn collect(code: &str, retryable: bool, message: impl Into<String>) -> Self {
+        Self::new(code, "collect", retryable, message)
+    }
+
+    pub fn cancel(code: &str, retryable: bool, message: impl Into<String>) -> Self {
+        Self::new(code, "cancel", retryable, message)
+    }
+
+    pub fn artifact(code: &str, message: impl Into<String>) -> Self {
+        Self::new(code, "artifact", false, message)
+    }
+
+    pub fn compatibility(code: &str, message: impl Into<String>) -> Self {
+        Self::new(code, "compatibility", false, message)
+    }
+
+    pub fn timeout(code: &str, retryable: bool, message: impl Into<String>) -> Self {
+        Self::new(code, "timeout", retryable, message)
+    }
+
+    fn new(code: &str, category: &str, retryable: bool, message: impl Into<String>) -> Self {
+        Self {
+            info: GithubErrorInfo {
+                code: code.to_string(),
+                category: category.to_string(),
+                retryable,
+                message: message.into(),
+            },
+        }
+    }
+
+    pub fn info(&self) -> &GithubErrorInfo {
+        &self.info
+    }
+}
+
+impl fmt::Display for GithubBackendError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "[{}:{}] {}",
+            self.info.category, self.info.code, self.info.message
+        )
+    }
+}
+
+impl Error for GithubBackendError {}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GhCommandPolicy {
+    pub max_attempts: u32,
+    pub timeout_secs: u64,
+    pub retry_backoff_ms: u64,
+}
+
+impl Default for GhCommandPolicy {
+    fn default() -> Self {
+        Self {
+            max_attempts: DEFAULT_MAX_ATTEMPTS,
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            retry_backoff_ms: DEFAULT_RETRY_BACKOFF_MS,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GithubWorkflowRef {
@@ -28,6 +135,14 @@ pub struct GithubRunLedger {
     pub dispatched: bool,
     pub dispatch_mode: String,
     pub gh_run_id: Option<u64>,
+    #[serde(default = "default_max_attempts")]
+    pub max_attempts: u32,
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub canceled: bool,
+    #[serde(default)]
+    pub last_error: Option<GithubErrorInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -40,6 +155,8 @@ pub struct DispatchResult {
     pub dry_run: bool,
     pub ledger_ref: String,
     pub command_preview: Vec<String>,
+    pub attempts_used: u32,
+    pub policy: GhCommandPolicy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,33 +170,89 @@ pub struct CollectResult {
     pub restore_mode: Option<String>,
     pub compatibility_ok: bool,
     pub compatibility_reason: String,
+    pub artifact_report: ArtifactReport,
+    pub errors: Vec<GithubErrorInfo>,
+    pub attempts_used: u32,
     pub dry_run: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactReport {
+    pub required: Vec<String>,
+    pub found: Vec<String>,
+    pub missing: Vec<String>,
+}
+
+impl ArtifactReport {
+    fn required_defaults() -> Vec<String> {
+        vec!["result.json".to_string(), "next_tokens.json".to_string()]
+    }
+
+    fn empty() -> Self {
+        Self {
+            required: Self::required_defaults(),
+            found: vec![],
+            missing: vec![],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CancelResult {
+    pub run_id: String,
+    pub owner_repo: String,
+    pub gh_run_id: u64,
+    pub canceled: bool,
+    pub dry_run: bool,
+    pub command_preview: Vec<String>,
+    pub attempts_used: u32,
+    pub policy: GhCommandPolicy,
+}
+
 pub fn parse_workflow_ref(workflow_ref: &str) -> Result<GithubWorkflowRef> {
-    let (lhs, commit_sha) = workflow_ref
-        .rsplit_once('@')
-        .ok_or_else(|| anyhow!("workflow_ref must contain '@<commit_sha>'"))?;
+    let (lhs, commit_sha) = workflow_ref.rsplit_once('@').ok_or_else(|| {
+        anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_INVALID",
+            "workflow_ref must contain '@<commit_sha>'",
+        ))
+    })?;
 
     if !is_hex_40(commit_sha) {
-        bail!("commit_sha must be a pinned 40-hex value, got '{commit_sha}'");
+        return Err(anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_UNPINNED",
+            format!("commit_sha must be a pinned 40-hex value, got '{commit_sha}'"),
+        )));
     }
 
     let mut parts = lhs.split('/');
-    let owner = parts
-        .next()
-        .ok_or_else(|| anyhow!("workflow_ref missing owner"))?;
-    let repo = parts
-        .next()
-        .ok_or_else(|| anyhow!("workflow_ref missing repo"))?;
+    let owner = parts.next().ok_or_else(|| {
+        anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_INVALID",
+            "workflow_ref missing owner",
+        ))
+    })?;
+    let repo = parts.next().ok_or_else(|| {
+        anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_INVALID",
+            "workflow_ref missing repo",
+        ))
+    })?;
     let workflow_path = parts.collect::<Vec<_>>().join("/");
     if workflow_path.is_empty() {
-        bail!("workflow_ref missing workflow path");
+        return Err(anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_INVALID",
+            "workflow_ref missing workflow path",
+        )));
     }
     let workflow_file = Path::new(&workflow_path)
         .file_name()
         .and_then(OsStr::to_str)
-        .ok_or_else(|| anyhow!("failed to parse workflow filename from '{workflow_path}'"))?
+        .ok_or_else(|| {
+            anyhow!(GithubBackendError::validation(
+                "WORKFLOW_REF_INVALID",
+                format!("failed to parse workflow filename from '{workflow_path}'"),
+            ))
+        })?
         .to_string();
 
     Ok(GithubWorkflowRef {
@@ -91,6 +264,7 @@ pub fn parse_workflow_ref(workflow_ref: &str) -> Result<GithubWorkflowRef> {
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn dispatch_run(
     cwd: &Path,
     spec: &RunSpec,
@@ -99,10 +273,54 @@ pub fn dispatch_run(
     agent_step: &str,
     dry_run: bool,
 ) -> Result<DispatchResult> {
-    let workflow_ref_raw = spec
-        .workflow_ref
-        .clone()
-        .ok_or_else(|| anyhow!("workflow_ref is required for github backend"))?;
+    dispatch_run_with_policy(
+        cwd,
+        spec,
+        allow_cold_start,
+        agent_image,
+        agent_step,
+        dry_run,
+        &GhCommandPolicy::default(),
+    )
+}
+
+pub fn dispatch_run_with_policy(
+    cwd: &Path,
+    spec: &RunSpec,
+    allow_cold_start: bool,
+    agent_image: &str,
+    agent_step: &str,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+) -> Result<DispatchResult> {
+    dispatch_run_internal(
+        cwd,
+        spec,
+        allow_cold_start,
+        agent_image,
+        agent_step,
+        dry_run,
+        policy,
+        Path::new("gh"),
+    )
+}
+
+fn dispatch_run_internal(
+    cwd: &Path,
+    spec: &RunSpec,
+    allow_cold_start: bool,
+    agent_image: &str,
+    agent_step: &str,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+    gh_binary: &Path,
+) -> Result<DispatchResult> {
+    let workflow_ref_raw = spec.workflow_ref.clone().ok_or_else(|| {
+        anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_REQUIRED",
+            "workflow_ref is required for github backend",
+        ))
+    })?;
     let wf = parse_workflow_ref(&workflow_ref_raw)?;
 
     let owner_repo = format!("{}/{}", wf.owner, wf.repo);
@@ -118,7 +336,6 @@ pub fn dispatch_run(
     };
 
     let mut cmd = vec![
-        "gh".to_string(),
         "api".to_string(),
         "--method".to_string(),
         "POST".to_string(),
@@ -144,9 +361,11 @@ pub fn dispatch_run(
         cmd.push("inputs[checkpoint_in]=".to_string());
     }
 
-    if !dry_run {
-        run_gh_command(cwd, &cmd[1..])?;
-    }
+    let attempts_used = if dry_run {
+        0
+    } else {
+        run_gh_command_with_policy(cwd, gh_binary, &cmd, policy, GhOperation::Dispatch)?
+    };
 
     let ledger = GithubRunLedger {
         run_id: spec.run_id.clone(),
@@ -163,6 +382,10 @@ pub fn dispatch_run(
             "live".to_string()
         },
         gh_run_id: None,
+        max_attempts: normalized_policy(policy).max_attempts,
+        timeout_secs: normalized_policy(policy).timeout_secs,
+        canceled: false,
+        last_error: None,
     };
 
     let ledger_path = github_ledger_path(cwd, &spec.run_id);
@@ -176,10 +399,13 @@ pub fn dispatch_run(
         dispatched: !dry_run,
         dry_run,
         ledger_ref: local_ref(cwd, &ledger_path),
-        command_preview: cmd,
+        command_preview: with_gh_prefix(gh_binary, &cmd),
+        attempts_used,
+        policy: normalized_policy(policy),
     })
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn collect_run(
     cwd: &Path,
     run_id: &str,
@@ -188,8 +414,55 @@ pub fn collect_run(
     out_dir: Option<&Path>,
     dry_run: bool,
 ) -> Result<CollectResult> {
+    collect_run_with_policy(
+        cwd,
+        run_id,
+        gh_run_id,
+        workflow_ref,
+        out_dir,
+        dry_run,
+        &GhCommandPolicy::default(),
+    )
+}
+
+pub fn collect_run_with_policy(
+    cwd: &Path,
+    run_id: &str,
+    gh_run_id: u64,
+    workflow_ref: Option<&str>,
+    out_dir: Option<&Path>,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+) -> Result<CollectResult> {
+    collect_run_internal(
+        cwd,
+        run_id,
+        gh_run_id,
+        workflow_ref,
+        out_dir,
+        dry_run,
+        policy,
+        Path::new("gh"),
+    )
+}
+
+fn collect_run_internal(
+    cwd: &Path,
+    run_id: &str,
+    gh_run_id: u64,
+    workflow_ref: Option<&str>,
+    out_dir: Option<&Path>,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+    gh_binary: &Path,
+) -> Result<CollectResult> {
+    let policy = normalized_policy(policy);
     let mut ledger = load_or_seed_ledger(cwd, run_id, workflow_ref)?;
     ledger.gh_run_id = Some(gh_run_id);
+    ledger.max_attempts = policy.max_attempts;
+    ledger.timeout_secs = policy.timeout_secs;
+    ledger.canceled = false;
+    ledger.last_error = None;
 
     let download_dir = out_dir.map(Path::to_path_buf).unwrap_or_else(|| {
         cwd.join(".swarm")
@@ -204,9 +477,11 @@ pub fn collect_run(
     let mut restore_mode = None;
     let mut compatibility_ok = true;
     let mut compatibility_reason = "ok".to_string();
+    let mut errors: Vec<GithubErrorInfo> = vec![];
+    let mut artifact_report = ArtifactReport::empty();
+    let mut attempts_used = 0;
 
     let cmd = vec![
-        "gh".to_string(),
         "run".to_string(),
         "download".to_string(),
         gh_run_id.to_string(),
@@ -217,13 +492,48 @@ pub fn collect_run(
     ];
 
     if !dry_run {
-        run_gh_command(cwd, &cmd[1..])?;
+        attempts_used =
+            run_gh_command_with_policy(cwd, gh_binary, &cmd, &policy, GhOperation::Collect)?;
 
         let result_path = find_first_file_named(&download_dir, "result.json");
         let next_tokens_path = find_first_file_named(&download_dir, "next_tokens.json");
+        let mut missing = vec![];
+        if result_path.is_some() {
+            artifact_report.found.push("result.json".to_string());
+        } else {
+            missing.push("result.json".to_string());
+            errors.push(
+                GithubBackendError::artifact(
+                    "ARTIFACT_MISSING_RESULT",
+                    "required artifact result.json is missing",
+                )
+                .info()
+                .clone(),
+            );
+        }
+        if next_tokens_path.is_some() {
+            artifact_report.found.push("next_tokens.json".to_string());
+        } else {
+            missing.push("next_tokens.json".to_string());
+            errors.push(
+                GithubBackendError::artifact(
+                    "ARTIFACT_MISSING_NEXT_TOKENS",
+                    "required artifact next_tokens.json is missing",
+                )
+                .info()
+                .clone(),
+            );
+        }
+        artifact_report.missing = missing;
 
         if let Some(path) = &result_path {
-            let result_json: Value = read_json(path)?;
+            let result_json: Value = read_json(path).map_err(|err| {
+                anyhow!(GithubBackendError::artifact(
+                    "ARTIFACT_RESULT_PARSE_FAILED",
+                    format!("failed to parse result.json: {err}"),
+                ))
+            })?;
+            validate_result_artifact(&result_json)?;
             restore_mode = result_json
                 .get("restore_mode")
                 .and_then(Value::as_str)
@@ -237,6 +547,13 @@ pub fn collect_run(
         }
 
         if let Some(path) = &next_tokens_path {
+            let next_tokens_json: Value = read_json(path).map_err(|err| {
+                anyhow!(GithubBackendError::artifact(
+                    "ARTIFACT_NEXT_TOKENS_PARSE_FAILED",
+                    format!("failed to parse next_tokens.json: {err}"),
+                ))
+            })?;
+            validate_next_tokens_artifact(&next_tokens_json)?;
             let local_run_dir = cwd.join(".swarm").join("local").join("runs").join(run_id);
             fs::create_dir_all(&local_run_dir)?;
             let dest = local_run_dir.join("next_tokens.json");
@@ -249,11 +566,37 @@ pub fn collect_run(
                 compatibility_ok = false;
                 compatibility_reason =
                     "restore_mode=cold_start violates fail_closed policy".to_string();
+                errors.push(
+                    GithubBackendError::compatibility(
+                        "RESTORE_POLICY_VIOLATION",
+                        compatibility_reason.clone(),
+                    )
+                    .info()
+                    .clone(),
+                );
             }
         }
     }
 
+    if !errors.is_empty() {
+        ledger.last_error = Some(errors[0].clone());
+    }
     write_json(&github_ledger_path(cwd, run_id), &ledger)?;
+    if !artifact_report.missing.is_empty() {
+        return Err(anyhow!(GithubBackendError::artifact(
+            "ARTIFACT_REQUIRED_MISSING",
+            format!(
+                "missing required artifacts: {}",
+                artifact_report.missing.join(", ")
+            ),
+        )));
+    }
+    if !compatibility_ok {
+        return Err(anyhow!(GithubBackendError::compatibility(
+            "RESTORE_POLICY_VIOLATION",
+            compatibility_reason.clone(),
+        )));
+    }
 
     Ok(CollectResult {
         run_id: run_id.to_string(),
@@ -265,7 +608,76 @@ pub fn collect_run(
         restore_mode,
         compatibility_ok,
         compatibility_reason,
+        artifact_report,
+        errors,
+        attempts_used,
         dry_run,
+    })
+}
+
+pub fn cancel_run(
+    cwd: &Path,
+    run_id: &str,
+    gh_run_id: Option<u64>,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+) -> Result<CancelResult> {
+    cancel_run_internal(cwd, run_id, gh_run_id, dry_run, policy, Path::new("gh"))
+}
+
+fn cancel_run_internal(
+    cwd: &Path,
+    run_id: &str,
+    gh_run_id: Option<u64>,
+    dry_run: bool,
+    policy: &GhCommandPolicy,
+    gh_binary: &Path,
+) -> Result<CancelResult> {
+    let policy = normalized_policy(policy);
+    let mut ledger: GithubRunLedger =
+        read_json(&github_ledger_path(cwd, run_id)).map_err(|err| {
+            anyhow!(GithubBackendError::validation(
+                "RUN_LEDGER_MISSING",
+                format!("run ledger missing for run_id={run_id}: {err}"),
+            ))
+        })?;
+    let gh_run_id = gh_run_id.or(ledger.gh_run_id).ok_or_else(|| {
+        anyhow!(GithubBackendError::validation(
+            "GH_RUN_ID_REQUIRED",
+            "gh_run_id is required (provide --gh-run-id or collect first)",
+        ))
+    })?;
+    ledger.gh_run_id = Some(gh_run_id);
+
+    let cmd = vec![
+        "run".to_string(),
+        "cancel".to_string(),
+        gh_run_id.to_string(),
+        "-R".to_string(),
+        ledger.owner_repo.clone(),
+    ];
+    let attempts_used = if dry_run {
+        0
+    } else {
+        run_gh_command_with_policy(cwd, gh_binary, &cmd, &policy, GhOperation::Cancel)?
+    };
+    if !dry_run {
+        ledger.canceled = true;
+    }
+    ledger.max_attempts = policy.max_attempts;
+    ledger.timeout_secs = policy.timeout_secs;
+    ledger.last_error = None;
+    write_json(&github_ledger_path(cwd, run_id), &ledger)?;
+
+    Ok(CancelResult {
+        run_id: run_id.to_string(),
+        owner_repo: ledger.owner_repo,
+        gh_run_id,
+        canceled: !dry_run,
+        dry_run,
+        command_preview: with_gh_prefix(gh_binary, &cmd),
+        attempts_used,
+        policy,
     })
 }
 
@@ -283,12 +695,15 @@ pub fn load_github_run_status(cwd: &Path, run_id: &str) -> Result<Value> {
     let ledger = read_json::<GithubRunLedger>(&github_ledger_path(cwd, run_id))?;
     Ok(json!({
         "run_id": run_id,
-        "status": if ledger.dispatched { "dispatched" } else { "prepared" },
+        "status": if ledger.canceled { "canceled" } else if ledger.dispatched { "dispatched" } else { "prepared" },
         "owner_repo": ledger.owner_repo,
         "workflow_file": ledger.workflow_file,
         "commit_sha": ledger.commit_sha,
         "gh_run_id": ledger.gh_run_id,
-        "fallback_policy": ledger.fallback_policy
+        "fallback_policy": ledger.fallback_policy,
+        "max_attempts": ledger.max_attempts,
+        "timeout_secs": ledger.timeout_secs,
+        "last_error": ledger.last_error
     }))
 }
 
@@ -298,6 +713,41 @@ pub fn logs_hint(cwd: &Path, run_id: &str) -> Value {
         "ledger_path": github_ledger_path(cwd, run_id),
         "collect_dir": cwd.join(".swarm").join("github").join("collect").join(run_id),
         "local_run_dir": cwd.join(".swarm").join("local").join("runs").join(run_id),
+    })
+}
+
+pub fn doctor_checks(cwd: &Path, workflow_ref: Option<&str>) -> Value {
+    let workflow_pin = match workflow_ref {
+        Some(value) => match parse_workflow_ref(value) {
+            Ok(parsed) => json!({
+                "configured": true,
+                "valid": true,
+                "owner_repo": format!("{}/{}", parsed.owner, parsed.repo),
+                "workflow_file": parsed.workflow_file,
+            }),
+            Err(err) => json!({
+                "configured": true,
+                "valid": false,
+                "error": err.to_string(),
+            }),
+        },
+        None => json!({
+            "configured": false,
+            "valid": false,
+            "error": "workflow_ref is not set in config",
+        }),
+    };
+
+    let gh_version = probe_gh(cwd, &["--version"]);
+    let gh_auth = probe_gh(cwd, &["auth", "status", "-h", "github.com"]);
+
+    json!({
+        "gh_cli_available": gh_version.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "gh_auth_ok": gh_auth.get("ok").and_then(Value::as_bool).unwrap_or(false),
+        "gh_version_probe": gh_version,
+        "gh_auth_probe": gh_auth,
+        "workflow_pin": workflow_pin,
+        "github_ledger_dir": cwd.join(".swarm").join("github").join("runs"),
     })
 }
 
@@ -311,8 +761,12 @@ fn load_or_seed_ledger(
         return read_json(&path);
     }
 
-    let workflow_ref = workflow_ref
-        .ok_or_else(|| anyhow!("workflow_ref is required when no existing ledger exists"))?;
+    let workflow_ref = workflow_ref.ok_or_else(|| {
+        anyhow!(GithubBackendError::validation(
+            "WORKFLOW_REF_REQUIRED",
+            "workflow_ref is required when no existing ledger exists",
+        ))
+    })?;
     let wf = parse_workflow_ref(workflow_ref)?;
     let ledger = GithubRunLedger {
         run_id: run_id.to_string(),
@@ -325,6 +779,10 @@ fn load_or_seed_ledger(
         dispatched: false,
         dispatch_mode: "collect_only".to_string(),
         gh_run_id: None,
+        max_attempts: DEFAULT_MAX_ATTEMPTS,
+        timeout_secs: DEFAULT_TIMEOUT_SECS,
+        canceled: false,
+        last_error: None,
     };
     write_json(&path, &ledger)?;
     Ok(ledger)
@@ -341,27 +799,224 @@ fn route_mode_str(mode: &RouteMode) -> &'static str {
     }
 }
 
-fn run_gh_command(cwd: &Path, args: &[String]) -> Result<()> {
-    let output = Command::new("gh")
-        .args(args)
-        .current_dir(cwd)
-        .output()
-        .with_context(
-            || "failed to invoke `gh`; ensure GitHub CLI is installed and authenticated",
-        )?;
+#[derive(Debug, Clone, Copy)]
+enum GhOperation {
+    Dispatch,
+    Collect,
+    Cancel,
+}
 
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        bail!(
-            "gh command failed (status {}): stderr: {} stdout: {}",
-            output.status,
-            stderr.trim(),
-            stdout.trim()
-        );
+impl GhOperation {
+    fn code(self) -> &'static str {
+        match self {
+            Self::Dispatch => "GH_DISPATCH_FAILED",
+            Self::Collect => "GH_COLLECT_FAILED",
+            Self::Cancel => "GH_CANCEL_FAILED",
+        }
     }
 
+    fn build_error(self, retryable: bool, message: impl Into<String>) -> GithubBackendError {
+        match self {
+            Self::Dispatch => GithubBackendError::dispatch(self.code(), retryable, message),
+            Self::Collect => GithubBackendError::collect(self.code(), retryable, message),
+            Self::Cancel => GithubBackendError::cancel(self.code(), retryable, message),
+        }
+    }
+}
+
+fn run_gh_command_with_policy(
+    cwd: &Path,
+    gh_binary: &Path,
+    args: &[String],
+    policy: &GhCommandPolicy,
+    operation: GhOperation,
+) -> Result<u32> {
+    let policy = normalized_policy(policy);
+    let mut last_err: Option<GithubBackendError> = None;
+
+    for attempt in 1..=policy.max_attempts {
+        match run_gh_once(cwd, gh_binary, args, policy.timeout_secs, operation) {
+            Ok(()) => return Ok(attempt),
+            Err(err) => {
+                let should_retry = err.info.retryable && attempt < policy.max_attempts;
+                last_err = Some(err);
+                if should_retry {
+                    let sleep_ms = policy.retry_backoff_ms.saturating_mul(attempt as u64);
+                    thread::sleep(Duration::from_millis(sleep_ms));
+                    continue;
+                }
+                break;
+            }
+        }
+    }
+
+    let err = last_err.unwrap_or_else(|| {
+        operation.build_error(false, "gh command failed without diagnostic details")
+    });
+    Err(anyhow!(GithubBackendError::new(
+        &err.info.code,
+        &err.info.category,
+        err.info.retryable,
+        format!(
+            "{} (attempted {} time(s), timeout={}s)",
+            err.info.message, policy.max_attempts, policy.timeout_secs
+        ),
+    )))
+}
+
+fn run_gh_once(
+    cwd: &Path,
+    gh_binary: &Path,
+    args: &[String],
+    timeout_secs: u64,
+    operation: GhOperation,
+) -> std::result::Result<(), GithubBackendError> {
+    let mut child = Command::new(gh_binary)
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| {
+            GithubBackendError::dependency(
+                "GH_CLI_UNAVAILABLE",
+                format!(
+                    "failed to invoke `gh` ({}): {err}; ensure GitHub CLI is installed/authenticated",
+                    gh_binary.display()
+                ),
+            )
+        })?;
+
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs.max(1));
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let output = child.wait_with_output().map_err(|err| {
+                    operation.build_error(true, format!("failed to read gh command output: {err}"))
+                })?;
+                if status.success() {
+                    return Ok(());
+                }
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let message = format!(
+                    "gh command failed (status {status}): stderr: {stderr} stdout: {stdout}"
+                );
+                return Err(operation.build_error(is_retryable_failure(&stderr, &stdout), message));
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(GithubBackendError::timeout(
+                        "GH_COMMAND_TIMEOUT",
+                        true,
+                        format!(
+                            "gh command timed out after {timeout_secs}s: {} {}",
+                            gh_binary.display(),
+                            args.join(" ")
+                        ),
+                    ));
+                }
+                thread::sleep(Duration::from_millis(25));
+            }
+            Err(err) => {
+                return Err(operation
+                    .build_error(true, format!("failed while waiting for gh command: {err}")));
+            }
+        }
+    }
+}
+
+fn is_retryable_failure(stderr: &str, stdout: &str) -> bool {
+    let combined = format!("{stderr}\n{stdout}").to_lowercase();
+    let retryable_signals = [
+        "timed out",
+        "timeout",
+        "connection reset",
+        "temporarily unavailable",
+        "502",
+        "503",
+        "504",
+        "rate limit",
+        "secondary rate limit",
+        "try again",
+    ];
+    retryable_signals
+        .iter()
+        .any(|needle| combined.contains(needle))
+}
+
+fn normalized_policy(policy: &GhCommandPolicy) -> GhCommandPolicy {
+    GhCommandPolicy {
+        max_attempts: policy.max_attempts.max(1),
+        timeout_secs: policy.timeout_secs.max(1),
+        retry_backoff_ms: policy.retry_backoff_ms.max(50),
+    }
+}
+
+fn with_gh_prefix(gh_binary: &Path, args: &[String]) -> Vec<String> {
+    let mut full = vec![gh_binary.display().to_string()];
+    full.extend_from_slice(args);
+    full
+}
+
+fn require_string_field<'a>(value: &'a Value, field: &str, code: &str) -> Result<&'a str> {
+    value.get(field).and_then(Value::as_str).ok_or_else(|| {
+        anyhow!(GithubBackendError::artifact(
+            code,
+            format!("artifact field '{field}' must be a string"),
+        ))
+    })
+}
+
+fn validate_result_artifact(value: &Value) -> Result<()> {
+    require_string_field(value, "run_id", "ARTIFACT_RESULT_SCHEMA_INVALID")?;
+    require_string_field(value, "status", "ARTIFACT_RESULT_SCHEMA_INVALID")?;
+    let restore_mode =
+        require_string_field(value, "restore_mode", "ARTIFACT_RESULT_SCHEMA_INVALID")?;
+    if restore_mode != "checkpoint" && restore_mode != "cold_start" {
+        return Err(anyhow!(GithubBackendError::artifact(
+            "ARTIFACT_RESULT_SCHEMA_INVALID",
+            format!("restore_mode must be checkpoint|cold_start, got '{restore_mode}'"),
+        )));
+    }
     Ok(())
+}
+
+fn validate_next_tokens_artifact(value: &Value) -> Result<()> {
+    require_string_field(
+        value,
+        "state_cap_next",
+        "ARTIFACT_NEXT_TOKENS_SCHEMA_INVALID",
+    )?;
+    require_string_field(value, "net_cap_next", "ARTIFACT_NEXT_TOKENS_SCHEMA_INVALID")?;
+    Ok(())
+}
+
+fn probe_gh(cwd: &Path, args: &[&str]) -> Value {
+    match Command::new("gh")
+        .args(args)
+        .current_dir(cwd)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+    {
+        Ok(output) => json!({
+            "ok": output.status.success(),
+            "status": output.status.code(),
+            "stdout": String::from_utf8_lossy(&output.stdout).trim(),
+            "stderr": String::from_utf8_lossy(&output.stderr).trim(),
+            "args": args,
+        }),
+        Err(err) => json!({
+            "ok": false,
+            "status": null,
+            "stdout": "",
+            "stderr": err.to_string(),
+            "args": args,
+        }),
+    }
 }
 
 fn find_first_file_named(root: &Path, filename: &str) -> Option<PathBuf> {
@@ -414,6 +1069,8 @@ mod tests {
     use super::*;
     use serde_json::{Value, json};
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+    use std::path::PathBuf;
     use swarm_core::{Backend, RouteMode, RunSpec};
     use tempfile::TempDir;
 
@@ -675,6 +1332,10 @@ mod tests {
             dispatched: true,
             dispatch_mode: "live".to_string(),
             gh_run_id: Some(777),
+            max_attempts: 3,
+            timeout_secs: 45,
+            canceled: false,
+            last_error: None,
         };
         write_json(
             &cwd.path()
@@ -718,5 +1379,186 @@ mod tests {
                 .expect("local_run_dir string")
                 .ends_with(".swarm/local/runs/logs-run")
         );
+    }
+
+    fn write_fake_gh_script(dir: &TempDir, script_body: &str) -> PathBuf {
+        let gh_path = dir.path().join("gh");
+        fs::write(&gh_path, script_body).expect("write gh script");
+        let mut perms = fs::metadata(&gh_path).expect("gh metadata").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&gh_path, perms).expect("set executable permissions");
+        gh_path
+    }
+
+    #[test]
+    fn dispatch_retries_on_transient_failure_then_succeeds() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let gh = write_fake_gh_script(
+            &tools,
+            r#"#!/bin/sh
+mkdir -p "$PWD/.swarm"
+count_file="$PWD/.swarm/gh-attempt-count.txt"
+count=0
+if [ -f "$count_file" ]; then
+  count=$(cat "$count_file")
+fi
+count=$((count+1))
+echo "$count" > "$count_file"
+if [ "$count" -lt 3 ]; then
+  echo "503 Service Unavailable" >&2
+  exit 1
+fi
+exit 0
+"#,
+        );
+        let spec = sample_spec("retry-dispatch");
+        let policy = GhCommandPolicy {
+            max_attempts: 4,
+            timeout_secs: 2,
+            retry_backoff_ms: 1,
+        };
+
+        let result = dispatch_run_internal(
+            cwd.path(),
+            &spec,
+            false,
+            "image",
+            "step",
+            false,
+            &policy,
+            &gh,
+        )
+        .expect("dispatch should succeed after retries");
+
+        assert_eq!(result.attempts_used, 3);
+        let count = fs::read_to_string(cwd.path().join(".swarm").join("gh-attempt-count.txt"))
+            .expect("read attempt count");
+        assert_eq!(count.trim(), "3");
+    }
+
+    #[test]
+    fn dispatch_timeout_is_classified() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let gh = write_fake_gh_script(
+            &tools,
+            r#"#!/bin/sh
+sleep 2
+exit 0
+"#,
+        );
+        let args = vec![
+            "api".to_string(),
+            "--method".to_string(),
+            "POST".to_string(),
+        ];
+        let policy = GhCommandPolicy {
+            max_attempts: 1,
+            timeout_secs: 1,
+            retry_backoff_ms: 1,
+        };
+
+        let err =
+            run_gh_command_with_policy(cwd.path(), &gh, &args, &policy, GhOperation::Dispatch)
+                .expect_err("timeout should fail");
+        let backend_err = err
+            .downcast_ref::<GithubBackendError>()
+            .expect("typed backend error");
+        assert_eq!(backend_err.info().code, "GH_COMMAND_TIMEOUT");
+        assert_eq!(backend_err.info().category, "timeout");
+    }
+
+    #[test]
+    fn cancel_updates_ledger_and_uses_expected_command() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let gh = write_fake_gh_script(
+            &tools,
+            r#"#!/bin/sh
+mkdir -p "$PWD/.swarm"
+printf "%s" "$*" > "$PWD/.swarm/cancel-args.txt"
+exit 0
+"#,
+        );
+        let spec = sample_spec("cancel-path");
+        dispatch_run_internal(
+            cwd.path(),
+            &spec,
+            true,
+            "image",
+            "step",
+            true,
+            &GhCommandPolicy::default(),
+            &gh,
+        )
+        .expect("seed ledger");
+
+        let cancel = cancel_run_internal(
+            cwd.path(),
+            "cancel-path",
+            Some(991),
+            false,
+            &GhCommandPolicy::default(),
+            &gh,
+        )
+        .expect("cancel should succeed");
+        assert!(cancel.canceled);
+        assert_eq!(cancel.gh_run_id, 991);
+
+        let args =
+            fs::read_to_string(cwd.path().join(".swarm").join("cancel-args.txt")).expect("args");
+        assert!(args.contains("run cancel 991 -R owner/repo"));
+
+        let status = load_github_run_status(cwd.path(), "cancel-path").expect("status");
+        assert_eq!(
+            status.get("status").and_then(Value::as_str),
+            Some("canceled")
+        );
+    }
+
+    #[test]
+    fn collect_fails_when_required_artifacts_missing() {
+        let cwd = TempDir::new().expect("temp dir");
+        let tools = TempDir::new().expect("tool dir");
+        let gh = write_fake_gh_script(
+            &tools,
+            r#"#!/bin/sh
+exit 0
+"#,
+        );
+        let spec = sample_spec("collect-missing");
+        dispatch_run_internal(
+            cwd.path(),
+            &spec,
+            false,
+            "image",
+            "step",
+            true,
+            &GhCommandPolicy::default(),
+            &gh,
+        )
+        .expect("seed ledger");
+
+        let err = collect_run_internal(
+            cwd.path(),
+            "collect-missing",
+            77,
+            None,
+            None,
+            false,
+            &GhCommandPolicy {
+                max_attempts: 1,
+                timeout_secs: 2,
+                retry_backoff_ms: 1,
+            },
+            &gh,
+        )
+        .expect_err("missing artifacts should fail");
+        let backend_err = err
+            .downcast_ref::<GithubBackendError>()
+            .expect("typed backend error");
+        assert_eq!(backend_err.info().code, "ARTIFACT_REQUIRED_MISSING");
+        assert_eq!(backend_err.info().category, "artifact");
     }
 }
