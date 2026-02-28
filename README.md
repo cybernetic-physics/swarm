@@ -20,7 +20,8 @@ Implemented now:
   - launch/resume/fork with SQLite snapshot transitions,
   - deterministic local tar bundle generation,
   - run status + state inspect,
-  - certificate hash/commit verification command.
+  - certificate schema/hash/commit semantics verification command,
+  - proof/public-input hash-binding verification command.
 - M2 GitHub adapter scaffold:
   - strict pinned workflow ref enforcement (`@<40-hex-commit>`),
   - workflow dispatch path via `gh api`,

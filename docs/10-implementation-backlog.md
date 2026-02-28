@@ -8,7 +8,7 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 ## P0 (must complete before beta)
 
 - [ ] Freeze schema contracts (`node`, `certificate`, `result`, `next_tokens`).
-- [ ] Implement verifier minimum checks and fixture suite.
+- [x] Implement verifier minimum checks and fixture suite.
 - [x] Create `swarm-core`, `swarm-state`, `swarm-verify`, `swarm-cli` crates.
 - [x] Implement local backend with deterministic bundle pipeline.
 - [ ] Implement capability envelope parser/serializer with redaction-safe logging.

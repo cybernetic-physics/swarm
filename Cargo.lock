@@ -715,6 +715,8 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "swarm-core",
+ "tempfile",
 ]
 
 [[package]]

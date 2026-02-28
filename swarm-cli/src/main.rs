@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use swarm_core::{Backend, RouteMode, RunSpec, validate_schema_kind, validate_schema_value};
 use swarm_state::LocalEngine;
-use swarm_verify::verify_certificate_file;
+use swarm_verify::{verify_certificate_file, verify_proof_file};
 
 const DEFAULT_AGENT_IMAGE: &str = "ghcr.io/example/swarm-agent:latest";
 const DEFAULT_AGENT_STEP: &str = "echo swarm m2 dispatch";
@@ -621,10 +621,14 @@ fn execute(cli: Cli) -> Result<CliResult> {
             VerifyCmd::Proof {
                 proof,
                 public_inputs,
-            } => Ok(success(
-                "proof verification scaffold",
-                json!({ "proof": proof, "public_inputs": public_inputs, "verified": false }),
-            )),
+            } => {
+                let verified = verify_proof_file(&proof, &public_inputs)
+                    .map_err(|err| anyhow!("VERIFY_PROOF_FAILED: {err}"))?;
+                Ok(success(
+                    "proof verification passed",
+                    json!({ "proof": proof, "public_inputs": public_inputs, "verified": verified }),
+                ))
+            }
         },
         Commands::Backend { command } => match command {
             BackendCmd::Github { command } => match command {
@@ -855,7 +859,7 @@ fn classify_exit_code(err: &anyhow::Error) -> i32 {
     }
 
     let msg = err.to_string();
-    if msg.starts_with("VERIFY_CERT_FAILED:") {
+    if msg.starts_with("VERIFY_CERT_FAILED:") || msg.starts_with("VERIFY_PROOF_FAILED:") {
         EXIT_VERIFICATION_FAILED
     } else if msg.starts_with("NET_CAP_POLICY_VIOLATION:") {
         EXIT_POLICY_VIOLATION
@@ -973,6 +977,12 @@ mod tests {
     fn net_cap_policy_violation_maps_to_policy_exit_code() {
         let err = anyhow!("NET_CAP_POLICY_VIOLATION: route policy mismatch");
         assert_eq!(classify_exit_code(&err), EXIT_POLICY_VIOLATION);
+    }
+
+    #[test]
+    fn verify_proof_failure_maps_to_verification_exit_code() {
+        let err = anyhow!("VERIFY_PROOF_FAILED: invalid proof");
+        assert_eq!(classify_exit_code(&err), EXIT_VERIFICATION_FAILED);
     }
 
     #[test]
