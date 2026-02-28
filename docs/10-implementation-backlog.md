@@ -21,20 +21,24 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 - [x] Add timeout/retry/cancel policy to backend adapters.
 - [x] Add machine-readable error taxonomy and stable exit codes.
 - [x] Add conformance tests for deterministic artifacts across repeated runs.
-- [ ] Add storage adapters (local + S3) with manifest integrity checks.
+- [ ] (postponed) Add storage adapters (local + S3) with manifest integrity checks.
+  - Decision (2026-02-28): keep GitHub Artifacts as the default storage path for Phase 0/1 live testing and MVP hardening.
+  - Revisit when artifact retention/size/cross-repo portability constraints materially block operations.
 - [x] Add `doctor` command for env/workflow prerequisites.
 
 ## P2 (Phase 2+ readiness)
 
-- [ ] GitLab backend adapter with output parity tests.
+- [ ] (postponed) GitLab backend adapter with output parity tests.
+  - Decision (2026-02-28): keep Phase 0/1 execution scope GitHub-only.
+  - Revisit when Phase 2+ substrate expansion is activated.
 - [ ] Policy capsule hash field integration (optional, verifier-gated).
 - [ ] Marketplace command surface stubs (`market offer/buy/fulfill`) behind feature flags.
 - [ ] Optional attestation proof generation wrapper command.
 
 ## Track: security hardening
 
-- [ ] Secret redaction tests for logs.
-- [ ] Token rotation atomicity tests.
+- [x] Secret redaction tests for logs.
+- [x] Token rotation atomicity tests.
 - [ ] Replay protection fixture coverage (`job_id`, `request_hash`, nonce/expiry).
 - [ ] Certificate schema strictness tests (reject unknown critical fields policy).
 

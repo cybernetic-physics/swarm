@@ -78,7 +78,15 @@ Done-when:
 
 ## Immediate next implementation order
 
-1. Add storage adapter abstraction and S3 manifest-integrity path.
-2. Tighten security hardening (secret redaction and token-rotation atomicity tests).
-3. Add optional policy-capsule hash branch (M4).
-4. Add GitLab backend parity scaffolding (M5).
+1. Add optional policy-capsule hash branch (M4).
+2. Extend security hardening with replay-protection fixtures and strict certificate schema checks.
+3. (Postponed) Add GitLab backend parity scaffolding (M5).
+4. (Postponed) Add storage adapter abstraction and S3 manifest-integrity path.
+
+Storage decision note (2026-02-28):
+- Continue using GitHub Artifacts as primary state storage for current live workflow chaining.
+- Defer S3 adapter work until artifact lifecycle limits or portability requirements become active blockers.
+
+Substrate scope note (2026-02-28):
+- Keep active execution scope GitHub-only for current phase.
+- Defer GitLab backend activation to explicit Phase 2+ expansion.

@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fs::{self, File};
-use std::io::Cursor;
+use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use swarm_core::{
     Backend, CapabilityEnvelope, CapabilityKind, RestoreMode, RouteMode, RunOutcome, RunSpec,
@@ -429,12 +429,6 @@ impl LocalEngine {
             net_cap_token: next_net_cap.encode()?,
         };
 
-        self.write_node(&child)?;
-        index
-            .aliases
-            .insert(format!("run:{}", spec.run_id), child.node_id.clone());
-        self.write_index(&index)?;
-
         let bundle = self.build_bundle(&child)?;
 
         let artifact = self.write_run_artifacts(
@@ -447,6 +441,12 @@ impl LocalEngine {
             &next_net_cap,
             allow_cold_start,
         )?;
+
+        self.write_node(&child)?;
+        index
+            .aliases
+            .insert(format!("run:{}", spec.run_id), child.node_id.clone());
+        self.write_index(&index)?;
 
         Ok(artifact)
     }
@@ -609,7 +609,7 @@ impl LocalEngine {
         let snapshot_path = self
             .states_dir()
             .join(format!("{}.sqlite.enc", token.state_id));
-        fs::write(&snapshot_path, &encrypted)?;
+        write_bytes_atomic(&snapshot_path, &encrypted)?;
 
         let meta = StateSnapshotMeta {
             state_id: token.state_id.clone(),
@@ -687,6 +687,8 @@ impl LocalEngine {
         next_net_cap: &CapabilityToken,
         allow_cold_start: bool,
     ) -> Result<LocalRunArtifacts> {
+        self.fail_if_requested("write_run_artifacts_precommit")?;
+
         let run_dir = self.runs_dir().join(&spec.run_id);
         fs::create_dir_all(&run_dir)?;
 
@@ -736,7 +738,7 @@ impl LocalEngine {
 
         let certificate_path = run_dir.join("certificate.json");
         let certificate_bytes = serde_json::to_vec_pretty(&certificate)?;
-        fs::write(&certificate_path, &certificate_bytes)?;
+        write_bytes_atomic(&certificate_path, &certificate_bytes)?;
         let artifact_hash = prefixed_sha256(&certificate_bytes);
 
         let restore_mode = if allow_cold_start {
@@ -762,7 +764,7 @@ impl LocalEngine {
             "certificate_ref": self.local_ref(&certificate_path),
             "artifact_hash": artifact_hash,
         });
-        fs::write(&result_path, serde_json::to_vec_pretty(&result_json)?)?;
+        write_bytes_atomic(&result_path, &serde_json::to_vec_pretty(&result_json)?)?;
 
         let next_tokens_path = run_dir.join("next_tokens.json");
         let next_tokens_json = json!({
@@ -771,9 +773,9 @@ impl LocalEngine {
             "state_id_next": child_node.state_db.state_id,
             "ratchet_step": child_node.state_db.ratchet_step,
         });
-        fs::write(
+        write_bytes_atomic(
             &next_tokens_path,
-            serde_json::to_vec_pretty(&next_tokens_json)?,
+            &serde_json::to_vec_pretty(&next_tokens_json)?,
         )?;
 
         let outcome = RunOutcome {
@@ -906,6 +908,14 @@ impl LocalEngine {
         write_json(&self.index_path(), index)
     }
 
+    fn fail_if_requested(&self, failpoint: &str) -> Result<()> {
+        let marker = self.root.join("failpoints").join(failpoint);
+        if marker.exists() {
+            bail!("injected failure: {failpoint}");
+        }
+        Ok(())
+    }
+
     fn local_ref(&self, path: &Path) -> String {
         let rel = path.strip_prefix(&self.root).unwrap_or(path);
         format!("local://{}", rel.display())
@@ -968,7 +978,20 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
         fs::create_dir_all(parent)?;
     }
     let bytes = serde_json::to_vec_pretty(value)?;
-    fs::write(path, bytes)?;
+    write_bytes_atomic(path, &bytes)?;
+    Ok(())
+}
+
+fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow!("path has no parent for atomic write: {}", path.display()))?;
+    fs::create_dir_all(parent)?;
+    let mut temp = NamedTempFile::new_in(parent)?;
+    temp.write_all(bytes)?;
+    temp.flush()?;
+    temp.persist(path)
+        .map_err(|err| anyhow!("failed to persist {}: {}", path.display(), err))?;
     Ok(())
 }
 
@@ -1361,5 +1384,60 @@ mod tests {
         );
         assert_ne!(resume_state_cap_a.state_id, launch_state_cap_a.state_id);
         assert_ne!(resume_net_cap_a.state_id, launch_net_cap_a.state_id);
+    }
+
+    #[test]
+    fn launch_failure_during_artifact_write_does_not_commit_rotated_alias() {
+        let temp = TempDir::new().expect("tempdir should be created");
+        let engine = LocalEngine::new(temp.path().join(".swarm/local"));
+
+        let marker = temp
+            .path()
+            .join(".swarm/local/failpoints/write_run_artifacts_precommit");
+        fs::create_dir_all(marker.parent().expect("failpoint dir")).expect("create failpoint dir");
+        fs::write(&marker, b"1").expect("write failpoint marker");
+
+        let err = engine
+            .launch(&run_spec("run-fail-atomicity", "root"), false)
+            .expect_err("launch should fail with injected failpoint");
+        assert!(
+            err.to_string()
+                .contains("injected failure: write_run_artifacts_precommit"),
+            "unexpected error: {err}"
+        );
+
+        let index_path = temp.path().join(".swarm/local/index.json");
+        let index = read_json(&index_path);
+        let aliases = index
+            .get("aliases")
+            .and_then(Value::as_object)
+            .expect("aliases object");
+        assert!(!aliases.contains_key("run:run-fail-atomicity"));
+
+        let nodes_dir = temp.path().join(".swarm/local/nodes");
+        let node_count = fs::read_dir(&nodes_dir)
+            .expect("nodes dir")
+            .filter_map(Result::ok)
+            .filter(|entry| entry.path().extension().and_then(|ext| ext.to_str()) == Some("json"))
+            .count();
+        assert_eq!(node_count, 1, "only root node should be committed");
+
+        fs::remove_file(&marker).expect("remove failpoint marker");
+
+        let recovered = engine
+            .launch(&run_spec("run-fail-atomicity", "root"), false)
+            .expect("launch should recover once failpoint is removed");
+        assert_eq!(recovered.run_id, "run-fail-atomicity");
+
+        let index_after = read_json(&index_path);
+        let aliases_after = index_after
+            .get("aliases")
+            .and_then(Value::as_object)
+            .expect("aliases object after recovery");
+        let alias_node = aliases_after
+            .get("run:run-fail-atomicity")
+            .and_then(Value::as_str)
+            .expect("run alias should be present after recovery");
+        assert_eq!(alias_node, recovered.node_id);
     }
 }

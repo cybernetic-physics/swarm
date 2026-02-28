@@ -1069,8 +1069,21 @@ fn error_from_info(info: &GithubErrorInfo) -> GithubBackendError {
 
 fn with_gh_prefix(gh_binary: &Path, args: &[String]) -> Vec<String> {
     let mut full = vec![gh_binary.display().to_string()];
-    full.extend_from_slice(args);
+    full.extend(args.iter().map(|arg| redact_dispatch_input_arg(arg)));
     full
+}
+
+fn redact_dispatch_input_arg(arg: &str) -> String {
+    const SENSITIVE_PREFIXES: [&str; 2] = ["inputs[state_cap_in]=", "inputs[net_cap_in]="];
+    if SENSITIVE_PREFIXES
+        .iter()
+        .any(|prefix| arg.starts_with(prefix))
+    {
+        let key = arg.split('=').next().unwrap_or(arg);
+        return format!("{key}=<redacted>");
+    }
+
+    arg.to_string()
 }
 
 fn require_string_field<'a>(value: &'a Value, field: &str, code: &str) -> Result<&'a str> {
@@ -1332,15 +1345,39 @@ mod tests {
         );
         assert!(
             out.command_preview
-                .contains(&"inputs[state_cap_in]=state-cap-token".to_string())
+                .contains(&"inputs[state_cap_in]=<redacted>".to_string())
         );
         assert!(
             out.command_preview
+                .contains(&"inputs[net_cap_in]=<redacted>".to_string())
+        );
+        assert!(
+            !out.command_preview
+                .contains(&"inputs[state_cap_in]=state-cap-token".to_string())
+        );
+        assert!(
+            !out.command_preview
                 .contains(&"inputs[net_cap_in]=net-cap-token".to_string())
         );
         assert!(
             !out.command_preview
                 .contains(&"inputs[checkpoint_in]=".to_string())
+        );
+    }
+
+    #[test]
+    fn redact_dispatch_input_arg_masks_state_and_net_tokens_only() {
+        assert_eq!(
+            redact_dispatch_input_arg("inputs[state_cap_in]=secret-state-token"),
+            "inputs[state_cap_in]=<redacted>"
+        );
+        assert_eq!(
+            redact_dispatch_input_arg("inputs[net_cap_in]=secret-net-token"),
+            "inputs[net_cap_in]=<redacted>"
+        );
+        assert_eq!(
+            redact_dispatch_input_arg("inputs[checkpoint_in]=gh-artifact://123/state-bundle"),
+            "inputs[checkpoint_in]=gh-artifact://123/state-bundle"
         );
     }
 
