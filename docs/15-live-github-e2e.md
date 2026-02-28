@@ -5,6 +5,38 @@ Date: 2026-02-28
 
 This runbook validates the real `swarm-cli -> GitHub workflow -> artifacts -> collect` path using one GitHub runner.
 
+## Executed result (2026-02-28)
+
+Real end-to-end run was executed against `cybernetic-physics/swarm` on commit:
+
+- `d07ced9b9304081f022bee0ddefd5d65693d89b2`
+
+Observed runs:
+
+- `swarm-proxy-smoke` run `22521214487`: `completed/success`
+- `swarm-live-run` run `22521216483`: `completed/success`
+
+Live dispatch/collect validation:
+
+- CLI dispatch succeeded for `run_id=live-1772283564`.
+- CLI collect succeeded for `gh_run_id=22521216483`.
+- Required artifacts were found and validated:
+  - `result.json`
+  - `next_tokens.json`
+- Local materialization succeeded:
+  - `.swarm/local/runs/live-1772283564/result.json`
+  - `.swarm/local/runs/live-1772283564/next_tokens.json`
+- `swarm run status --run-id live-1772283564` returned `status=succeeded`.
+
+Important implementation note discovered during live testing:
+
+- GitHub workflow-dispatch API rejected SHA refs (`HTTP 422: No ref found`) when used as `ref=<commit_sha>`.
+- Fix implemented in commit `d07ced9`: dispatch now uses a branch/tag ref (default `main`, configurable with `SWARM_GH_DISPATCH_REF`) while passing `expected_commit_sha` into workflow inputs and enforcing it in-workflow.
+
+Current known limitation:
+
+- Dispatch does not yet auto-return or auto-resolve `gh_run_id`; collect still requires manually selecting the run id from Actions.
+
 ## Preconditions
 
 - In repo root:

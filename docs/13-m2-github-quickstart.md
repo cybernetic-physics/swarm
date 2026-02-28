@@ -3,6 +3,9 @@
 Status: current (M2 + M2b)
 Date: 2026-02-28
 
+For a tested live path (single GitHub runner) with concrete run IDs and findings, see:
+- `docs/15-live-github-e2e.md`
+
 This quickstart covers the implemented M2 GitHub adapter path:
 - pinned workflow ref parsing and enforcement,
 - workflow dispatch via GitHub CLI (`gh api`),
