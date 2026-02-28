@@ -1,5 +1,5 @@
 [workspace]
-members = ["swarm-cli", "swarm-core", "swarm-state", "swarm-verify"]
+members = ["swarm-cli", "swarm-core", "swarm-proxy", "swarm-state", "swarm-verify"]
 resolver = "3"
 
 [workspace.package]
