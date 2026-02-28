@@ -681,17 +681,21 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     errors.push(format!("file does not exist: {}", file.display()));
                 }
                 let valid = schema_check.valid && file_exists;
+                if !valid {
+                    return Err(anyhow!(
+                        "SCHEMA_VALIDATE_FAILED: schema={} file={} errors={}",
+                        schema,
+                        file.display(),
+                        errors.join(" | ")
+                    ));
+                }
                 Ok(success(
-                    if valid {
-                        "schema validation passed"
-                    } else {
-                        "schema validation failed"
-                    },
+                    "schema validation passed",
                     json!({
                         "schema": schema,
                         "file": file,
-                        "valid": valid,
-                        "errors": errors,
+                        "valid": true,
+                        "errors": [],
                     }),
                 ))
             }
@@ -779,7 +783,7 @@ fn classify_exit_code(err: &anyhow::Error) -> i32 {
     let msg = err.to_string();
     if msg.starts_with("VERIFY_CERT_FAILED:") {
         EXIT_VERIFICATION_FAILED
-    } else if msg.contains("unsupported key") {
+    } else if msg.starts_with("SCHEMA_VALIDATE_FAILED:") || msg.contains("unsupported key") {
         EXIT_INVALID_INPUT
     } else {
         1
@@ -856,5 +860,35 @@ fn gh_policy(max_attempts: u32, timeout_secs: u64) -> github_backend::GhCommandP
         max_attempts,
         timeout_secs,
         retry_backoff_ms: 250,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use tempfile::TempDir;
+
+    #[test]
+    fn schema_validate_invalid_returns_error() {
+        let tmp = TempDir::new().expect("temp dir");
+        let existing_file = tmp.path().join("x.json");
+        fs::write(&existing_file, "{}").expect("write fixture file");
+
+        let cli = Cli {
+            json: true,
+            quiet: false,
+            verbose: 0,
+            command: Commands::Schema {
+                command: SchemaCmd::Validate {
+                    schema: "banana".to_string(),
+                    file: existing_file,
+                },
+            },
+        };
+
+        let err = execute(cli).expect_err("invalid schema should be an error");
+        assert!(err.to_string().starts_with("SCHEMA_VALIDATE_FAILED:"));
+        assert_eq!(classify_exit_code(&err), EXIT_INVALID_INPUT);
     }
 }
