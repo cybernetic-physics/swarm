@@ -707,6 +707,21 @@ impl LocalEngine {
             .workflow_ref
             .clone()
             .unwrap_or_else(|| "local/swarm-local-run.yml@local-dev-commit".to_string());
+        let policy_generated_at = logical_time(child_node.state_db.ratchet_step);
+        let policy_path = run_dir.join("policy.json");
+        let policy_json = json!({
+            "schema_version": "agent_swarm-policy-v1",
+            "policy_id": format!("policy-{}", spec.run_id),
+            "run_id": spec.run_id,
+            "operation": operation.as_str(),
+            "backend": backend_as_str(&spec.backend),
+            "route_mode": route_mode_as_str(&spec.route_mode),
+            "workflow_ref": workflow_ref.clone(),
+            "policy_generated_at": policy_generated_at.clone()
+        });
+        let policy_bytes = serde_json::to_vec_pretty(&policy_json)?;
+        write_bytes_atomic(&policy_path, &policy_bytes)?;
+        let policy_hash = prefixed_sha256(&policy_bytes);
 
         let certificate = json!({
             "type": "loom-agent-run-v1",
@@ -734,6 +749,12 @@ impl LocalEngine {
                 "finished_at": logical_time(child_node.state_db.ratchet_step),
             },
             "timestamp": logical_time(child_node.state_db.ratchet_step),
+            "policy": {
+                "schema_version": "agent_swarm-policy-v1",
+                "policy_hash": policy_hash,
+                "policy_ref": self.local_ref(&policy_path),
+                "policy_generated_at": policy_generated_at
+            }
         });
 
         let certificate_path = run_dir.join("certificate.json");
@@ -1131,6 +1152,7 @@ mod tests {
         result: Vec<u8>,
         next_tokens: Vec<u8>,
         certificate: Vec<u8>,
+        policy: Vec<u8>,
     }
 
     fn run_spec(run_id: &str, node: &str) -> RunSpec {
@@ -1161,6 +1183,17 @@ mod tests {
                 .expect("next_tokens bytes"),
             certificate: fs::read(engine.resolve_local_ref(&artifacts.certificate_ref))
                 .expect("certificate bytes"),
+            policy: fs::read(
+                engine.resolve_local_ref(
+                    read_json(&engine.resolve_local_ref(&artifacts.certificate_ref))
+                        .get("policy")
+                        .and_then(Value::as_object)
+                        .and_then(|policy| policy.get("policy_ref"))
+                        .and_then(Value::as_str)
+                        .expect("certificate policy_ref"),
+                ),
+            )
+            .expect("policy bytes"),
         }
     }
 
@@ -1196,6 +1229,29 @@ mod tests {
             "certificate schema errors: {:?}",
             certificate_check.errors
         );
+        let policy_block = certificate_value
+            .get("policy")
+            .and_then(Value::as_object)
+            .expect("certificate policy block");
+        assert_eq!(
+            policy_block
+                .get("schema_version")
+                .and_then(Value::as_str)
+                .expect("policy schema_version"),
+            "agent_swarm-policy-v1"
+        );
+        let policy_ref = policy_block
+            .get("policy_ref")
+            .and_then(Value::as_str)
+            .expect("policy_ref");
+        let policy_hash = policy_block
+            .get("policy_hash")
+            .and_then(Value::as_str)
+            .expect("policy_hash");
+        let policy_path = engine.resolve_local_ref(policy_ref);
+        let _policy_value = read_json(&policy_path);
+        let policy_bytes = fs::read(&policy_path).expect("policy bytes for hash check");
+        assert_eq!(policy_hash, prefixed_sha256(&policy_bytes));
 
         let bundle_bytes = fs::read(&bundle_path).expect("bundle bytes for hash validation");
         let bundle_sha = result_value
@@ -1319,6 +1375,7 @@ mod tests {
         assert_eq!(bytes_a.result, bytes_b.result);
         assert_eq!(bytes_a.next_tokens, bytes_b.next_tokens);
         assert_eq!(bytes_a.certificate, bytes_b.certificate);
+        assert_eq!(bytes_a.policy, bytes_b.policy);
 
         let (state_cap_a, net_cap_a) = assert_run_artifact_contracts(&engine_a, &run_a);
         let (state_cap_b, net_cap_b) = assert_run_artifact_contracts(&engine_b, &run_b);
@@ -1359,6 +1416,7 @@ mod tests {
         assert_eq!(resume_bytes_a.result, resume_bytes_b.result);
         assert_eq!(resume_bytes_a.next_tokens, resume_bytes_b.next_tokens);
         assert_eq!(resume_bytes_a.certificate, resume_bytes_b.certificate);
+        assert_eq!(resume_bytes_a.policy, resume_bytes_b.policy);
 
         let (launch_state_cap_a, launch_net_cap_a) =
             assert_run_artifact_contracts(&engine_a, &launch_a);

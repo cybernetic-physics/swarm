@@ -241,32 +241,116 @@ jobs:
           bundle_artifact_name="state-bundle-${run_id}"
           bundle_ref="gh-artifact://${GITHUB_RUN_ID}/${bundle_artifact_name}"
           bundle_hash="sha256:$(sha256sum artifact/state_bundle.tar.enc | awk '{print $1}')"
-          artifact_hash="sha256:$(printf '%s' "${run_id}::certificate" | sha256sum | awk '{print $1}')"
+          export RUN_ID="${run_id}"
+          export STATE_ID_NEXT="${state_id_next}"
+          export RATCHET_STEP_NEXT="${ratchet_step_next}"
+          export STATE_CAP_NEXT="${state_cap}"
+          export NET_CAP_NEXT="${net_cap}"
+          export BUNDLE_REF="${bundle_ref}"
+          export BUNDLE_HASH="${bundle_hash}"
+          export EXPECTED_COMMIT_SHA="${{ inputs.expected_commit_sha }}"
 
-          cat > artifact/result.json <<JSON
-          {
-            "run_id": "${run_id}",
-            "status": "succeeded",
-            "operation": "launch",
-            "node_id": "github-node-${run_id}",
-            "parent_node_id": "root",
-            "state_id": "${state_id_next}",
-            "restore_mode": "checkpoint",
-            "bundle_ref": "${bundle_ref}",
-            "bundle_sha256": "${bundle_hash}",
-            "certificate_ref": "artifact://certificates/${run_id}.json",
-            "artifact_hash": "${artifact_hash}"
-          }
-          JSON
+          python3 - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
 
-          cat > artifact/next_tokens.json <<JSON
-          {
-            "state_cap_next": "${state_cap}",
-            "net_cap_next": "${net_cap}",
-            "state_id_next": "${state_id_next}",
-            "ratchet_step": ${ratchet_step_next}
+          run_id = os.environ["RUN_ID"]
+          state_id_next = os.environ["STATE_ID_NEXT"]
+          ratchet_step_next = int(os.environ["RATCHET_STEP_NEXT"])
+          state_cap_next = os.environ["STATE_CAP_NEXT"]
+          net_cap_next = os.environ["NET_CAP_NEXT"]
+          bundle_ref = os.environ["BUNDLE_REF"]
+          bundle_hash = os.environ["BUNDLE_HASH"]
+          expected_commit_sha = os.environ["EXPECTED_COMMIT_SHA"]
+          repo = os.environ["GITHUB_REPOSITORY"]
+          workflow_ref = f"{repo}/.github/workflows/swarm-live-run.yml@{expected_commit_sha}"
+          timestamp = f"1970-01-01T00:00:{ratchet_step_next % 60:02d}Z"
+
+          capability_meta = json.loads(Path("artifact/capability_meta.json").read_text(encoding="utf-8"))
+          state_current = capability_meta.get("state_current", {})
+          parent_state_id = state_current.get("state_id", "state-root")
+          parent_ratchet_step = int(state_current.get("ratchet_step", 0))
+
+          policy = {
+              "schema_version": "agent_swarm-policy-v1",
+              "policy_id": f"policy-{run_id}",
+              "run_id": run_id,
+              "route_mode": "direct",
+              "source_backend": "artifact",
+              "output_backend": "artifact",
+              "workflow_ref": workflow_ref,
+              "policy_generated_at": timestamp,
           }
-          JSON
+          policy_bytes = json.dumps(policy, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+          Path("artifact/policy.json").write_bytes(policy_bytes)
+          policy_hash = "sha256:" + hashlib.sha256(policy_bytes).hexdigest()
+
+          certificate = {
+              "type": "loom-agent-run-v1",
+              "job_id": run_id,
+              "request_hash": "sha256:" + hashlib.sha256(f"{run_id}::launch".encode("utf-8")).hexdigest(),
+              "mode": "prompt-run",
+              "parent_state": {
+                  "state_id": parent_state_id,
+                  "bundle_sha256": bundle_hash,
+                  "ratchet_step": parent_ratchet_step,
+              },
+              "result": {
+                  "response_sha256": "sha256:" + hashlib.sha256(f"{run_id}::response".encode("utf-8")).hexdigest(),
+                  "response_locator": f"artifact://swarm-live-{run_id}/result.json",
+                  "new_state": {
+                      "state_id": state_id_next,
+                      "bundle_sha256": bundle_hash,
+                      "bundle_manifest_sha256": "sha256:" + hashlib.sha256(b"manifest-v1").hexdigest(),
+                  },
+              },
+              "runtime": {
+                  "workflow_ref": workflow_ref,
+                  "runner_class": "github-hosted",
+                  "started_at": timestamp,
+                  "finished_at": timestamp,
+              },
+              "timestamp": timestamp,
+              "policy": {
+                  "schema_version": "agent_swarm-policy-v1",
+                  "policy_hash": policy_hash,
+                  "policy_ref": f"artifact://swarm-live-{run_id}/policy.json",
+                  "policy_generated_at": timestamp,
+              },
+          }
+          certificate_bytes = json.dumps(certificate, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+          Path("artifact/certificate.json").write_bytes(certificate_bytes)
+          artifact_hash = "sha256:" + hashlib.sha256(certificate_bytes).hexdigest()
+
+          result = {
+              "run_id": run_id,
+              "status": "succeeded",
+              "operation": "launch",
+              "node_id": f"github-node-{run_id}",
+              "parent_node_id": "root",
+              "state_id": state_id_next,
+              "restore_mode": "checkpoint",
+              "bundle_ref": bundle_ref,
+              "bundle_sha256": bundle_hash,
+              "certificate_ref": f"artifact://swarm-live-{run_id}/certificate.json",
+              "artifact_hash": artifact_hash,
+          }
+          Path("artifact/result.json").write_bytes(
+              json.dumps(result, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+          )
+
+          next_tokens = {
+              "state_cap_next": state_cap_next,
+              "net_cap_next": net_cap_next,
+              "state_id_next": state_id_next,
+              "ratchet_step": ratchet_step_next,
+          }
+          Path("artifact/next_tokens.json").write_bytes(
+              json.dumps(next_tokens, indent=2, sort_keys=True).encode("utf-8") + b"\n"
+          )
+          PY
 
       - name: Upload swarm artifacts
         uses: actions/upload-artifact@v4

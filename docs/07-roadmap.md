@@ -1,6 +1,6 @@
 # Roadmap (M0-M5)
 
-Status: active (M0-M3 implemented; M4-M5 pending)
+Status: active (M0-M3 implemented; M4 Phase 1 implemented; M4 strict/on-chain + M5 pending)
 Date: 2026-02-28
 
 ## M0: contract freeze
@@ -58,14 +58,21 @@ Deliverables:
 Done-when:
 - proxy mode works for required routes and blocks on policy mismatch.
 
-## M4 (Phase 2+ prep): policy capsule hook
+## M4: policy capsule hook
 
 Deliverables:
-- optional `policy.json` hash integration in certificate.
-- enforcement hooks for deterministic policy checks.
+- Phase 1 (implemented): optional `policy.json` hash integration in certificate and verifier optional branch.
+- Phase 1 (implemented): strict verifier mode to require policy metadata.
+- Phase 2+ (pending): on-chain policy hash enforcement in settlement path.
+- Phase 2+ (pending): deterministic runtime policy enforcement hooks.
 
 Done-when:
-- verifier includes optional policy-hash branch.
+- Phase 1 done-when:
+  - local/GitHub outputs include policy metadata in certificate.
+  - verifier validates policy hash when policy metadata is present.
+  - strict mode rejects missing policy metadata.
+- Full M4 done-when:
+  - settlement path enforces policy hash on-chain.
 
 ## M5 (Phase 2+): GitLab parity + marketplace scaffolding
 
@@ -78,8 +85,8 @@ Done-when:
 
 ## Immediate next implementation order
 
-1. Add optional policy-capsule hash branch (M4).
-2. Extend security hardening with replay-protection fixtures and strict certificate schema checks.
+1. Add settlement-layer policy hash enforcement path (M4 Phase 2).
+2. Extend security hardening with replay-protection fixtures and stricter certificate critical-field policy.
 3. (Postponed) Add GitLab backend parity scaffolding (M5).
 4. (Postponed) Add storage adapter abstraction and S3 manifest-integrity path.
 

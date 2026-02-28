@@ -341,6 +341,19 @@ fn validate_certificate(value: &Value) -> Vec<String> {
         );
     }
 
+    if let Some(policy_value) = obj.get("policy") {
+        if let Some(policy) = require_object(Some(policy_value), "policy", &mut errors) {
+            require_eq_str(
+                policy.get("schema_version"),
+                "agent_swarm-policy-v1",
+                "policy.schema_version",
+                &mut errors,
+            );
+            require_prefixed_hash(policy.get("policy_hash"), "policy.policy_hash", &mut errors);
+            require_non_empty_string(policy.get("policy_ref"), "policy.policy_ref", &mut errors);
+        }
+    }
+
     errors
 }
 
@@ -517,5 +530,59 @@ mod tests {
         let res = validate_schema_value("next_tokens", &value);
         assert!(!res.valid);
         assert!(!res.errors.is_empty());
+    }
+
+    #[test]
+    fn rejects_invalid_certificate_policy_block() {
+        let value = json!({
+            "type": "loom-agent-run-v1",
+            "job_id": "run-1",
+            "request_hash": "sha256:abcd",
+            "mode": "prompt-run",
+            "parent_state": {
+                "state_id": "state-parent",
+                "bundle_sha256": "sha256:parent",
+                "ratchet_step": 1
+            },
+            "result": {
+                "response_sha256": "sha256:resp",
+                "response_locator": "local://runs/run-1/result.json",
+                "new_state": {
+                    "state_id": "state-child",
+                    "bundle_sha256": "sha256:child",
+                    "bundle_manifest_sha256": "sha256:manifest"
+                }
+            },
+            "runtime": {
+                "workflow_ref": "owner/repo/.github/workflows/run.yml@0123456789abcdef0123456789abcdef01234567",
+                "runner_class": "github-hosted",
+                "started_at": "2026-02-28T12:00:10Z",
+                "finished_at": "2026-02-28T12:00:20Z"
+            },
+            "timestamp": "2026-02-28T12:00:20Z",
+            "policy": {
+                "schema_version": "wrong-policy-schema",
+                "policy_hash": "sha256:",
+                "policy_ref": ""
+            }
+        });
+
+        let res = validate_schema_value("certificate", &value);
+        assert!(!res.valid);
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.contains("policy.schema_version"))
+        );
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.contains("policy.policy_hash"))
+        );
+        assert!(
+            res.errors
+                .iter()
+                .any(|err| err.contains("policy.policy_ref"))
+        );
     }
 }

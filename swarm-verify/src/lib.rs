@@ -16,6 +16,7 @@ pub struct Certificate {
     pub result: CertificateResult,
     pub runtime: Runtime,
     pub timestamp: String,
+    pub policy: Option<PolicyBinding>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -45,6 +46,14 @@ pub struct Runtime {
     pub runner_class: String,
     pub started_at: String,
     pub finished_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PolicyBinding {
+    pub schema_version: String,
+    pub policy_hash: String,
+    pub policy_ref: String,
+    pub policy_generated_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -158,6 +167,18 @@ pub fn verify_certificate_semantics(certificate: &Certificate) -> Result<()> {
     ensure_non_empty(&certificate.runtime.started_at, "runtime.started_at")?;
     ensure_non_empty(&certificate.runtime.finished_at, "runtime.finished_at")?;
     ensure_non_empty(&certificate.timestamp, "timestamp")?;
+
+    if let Some(policy) = &certificate.policy {
+        if policy.schema_version != "agent_swarm-policy-v1" {
+            bail!(
+                "policy.schema_version must equal 'agent_swarm-policy-v1', got '{}'",
+                policy.schema_version
+            );
+        }
+        ensure_sha256(&policy.policy_hash, "policy.policy_hash")?;
+        ensure_non_empty(&policy.policy_ref, "policy.policy_ref")?;
+    }
+
     Ok(())
 }
 
@@ -186,15 +207,70 @@ pub fn load_certificate(path: &Path) -> Result<(Certificate, Vec<u8>)> {
     Ok((cert, bytes))
 }
 
+pub fn verify_policy_binding(
+    certificate: &Certificate,
+    policy_bytes: Option<&[u8]>,
+    require_policy: bool,
+) -> Result<()> {
+    match &certificate.policy {
+        Some(binding) => {
+            let bytes = policy_bytes.ok_or_else(|| {
+                anyhow!("certificate includes policy metadata; provide --policy-file")
+            })?;
+            let _: serde_json::Value = serde_json::from_slice(bytes)
+                .map_err(|err| anyhow!("policy file must contain valid JSON: {err}"))?;
+            let actual_hash = hash_bytes_prefixed_sha256(bytes);
+            if actual_hash != binding.policy_hash {
+                bail!(
+                    "policy hash mismatch: certificate declares {}, actual {}",
+                    binding.policy_hash,
+                    actual_hash
+                );
+            }
+            Ok(())
+        }
+        None => {
+            if require_policy {
+                bail!("policy is required but certificate has no policy section");
+            }
+            if policy_bytes.is_some() {
+                bail!("policy file provided but certificate has no policy metadata");
+            }
+            Ok(())
+        }
+    }
+}
+
 pub fn verify_certificate_file(
     certificate_path: &Path,
     expected_artifact_hash: &str,
     required_commit: &str,
 ) -> Result<Certificate> {
+    verify_certificate_file_with_policy(
+        certificate_path,
+        expected_artifact_hash,
+        required_commit,
+        None,
+        false,
+    )
+}
+
+pub fn verify_certificate_file_with_policy(
+    certificate_path: &Path,
+    expected_artifact_hash: &str,
+    required_commit: &str,
+    policy_path: Option<&Path>,
+    require_policy: bool,
+) -> Result<Certificate> {
     let (cert, bytes) = load_certificate(certificate_path)?;
     verify_certificate_hash_binding(&bytes, expected_artifact_hash)?;
     verify_certificate_semantics(&cert)?;
     verify_required_commit(&cert, required_commit)?;
+    let policy_bytes = match policy_path {
+        Some(path) => Some(fs::read(path)?),
+        None => None,
+    };
+    verify_policy_binding(&cert, policy_bytes.as_deref(), require_policy)?;
     Ok(cert)
 }
 
@@ -240,7 +316,8 @@ pub fn verify_proof_file(
 mod tests {
     use super::{
         Certificate, extract_commit_from_workflow_ref, hash_certificate_bytes,
-        verify_certificate_file, verify_certificate_hash_binding, verify_certificate_semantics,
+        verify_certificate_file, verify_certificate_file_with_policy,
+        verify_certificate_hash_binding, verify_certificate_semantics, verify_policy_binding,
         verify_proof_file, verify_required_commit,
     };
     use serde_json::json;
@@ -331,6 +408,112 @@ mod tests {
             err.to_string()
                 .contains("certificate schema validation failed")
         );
+    }
+
+    #[test]
+    fn verify_policy_binding_passes_for_matching_policy_hash() {
+        let mut cert: Certificate =
+            serde_json::from_str(CERTIFICATE_FIXTURE).expect("fixture parse");
+        let policy_bytes = br#"{"schema_version":"agent_swarm-policy-v1","route_mode":"direct"}"#;
+        cert.policy = Some(super::PolicyBinding {
+            schema_version: "agent_swarm-policy-v1".to_string(),
+            policy_hash: hash_certificate_bytes(policy_bytes),
+            policy_ref: "local://runs/run-1/policy.json".to_string(),
+            policy_generated_at: Some("2026-02-28T12:00:20Z".to_string()),
+        });
+
+        verify_policy_binding(&cert, Some(policy_bytes), false)
+            .expect("policy binding should pass");
+    }
+
+    #[test]
+    fn verify_policy_binding_rejects_hash_mismatch() {
+        let mut cert: Certificate =
+            serde_json::from_str(CERTIFICATE_FIXTURE).expect("fixture parse");
+        let policy_bytes = br#"{"schema_version":"agent_swarm-policy-v1","route_mode":"direct"}"#;
+        cert.policy = Some(super::PolicyBinding {
+            schema_version: "agent_swarm-policy-v1".to_string(),
+            policy_hash: "sha256:deadbeef".to_string(),
+            policy_ref: "local://runs/run-1/policy.json".to_string(),
+            policy_generated_at: None,
+        });
+
+        let err = verify_policy_binding(&cert, Some(policy_bytes), false)
+            .expect_err("policy hash mismatch should fail");
+        assert!(err.to_string().contains("policy hash mismatch"));
+    }
+
+    #[test]
+    fn verify_policy_binding_strict_mode_requires_policy_metadata() {
+        let cert: Certificate = serde_json::from_str(CERTIFICATE_FIXTURE).expect("fixture parse");
+        let err = verify_policy_binding(&cert, None, true)
+            .expect_err("strict mode should require policy metadata");
+        assert!(err.to_string().contains("policy is required"));
+    }
+
+    #[test]
+    fn verify_policy_binding_rejects_missing_policy_file_when_metadata_present() {
+        let mut cert: Certificate =
+            serde_json::from_str(CERTIFICATE_FIXTURE).expect("fixture parse");
+        cert.policy = Some(super::PolicyBinding {
+            schema_version: "agent_swarm-policy-v1".to_string(),
+            policy_hash: "sha256:abcd".to_string(),
+            policy_ref: "local://runs/run-1/policy.json".to_string(),
+            policy_generated_at: None,
+        });
+
+        let err = verify_policy_binding(&cert, None, false)
+            .expect_err("missing policy file should fail when metadata present");
+        assert!(err.to_string().contains("provide --policy-file"));
+    }
+
+    #[test]
+    fn verify_certificate_file_with_policy_rejects_strict_mode_without_policy() {
+        let tmp = TempDir::new().expect("temp dir");
+        let cert_path = tmp.path().join("certificate.json");
+        fs::write(&cert_path, CERTIFICATE_FIXTURE).expect("write fixture");
+        let expected_hash = hash_certificate_bytes(CERTIFICATE_FIXTURE.as_bytes());
+
+        let err = verify_certificate_file_with_policy(
+            &cert_path,
+            &expected_hash,
+            "0123456789abcdef0123456789abcdef01234567",
+            None,
+            true,
+        )
+        .expect_err("strict policy mode should fail without metadata");
+        assert!(err.to_string().contains("policy is required"));
+    }
+
+    #[test]
+    fn verify_certificate_file_with_policy_passes_for_matching_file() {
+        let tmp = TempDir::new().expect("temp dir");
+        let cert_path = tmp.path().join("certificate.with-policy.json");
+        let policy_path = tmp.path().join("policy.json");
+        let policy_bytes = br#"{"schema_version":"agent_swarm-policy-v1","route_mode":"direct"}"#;
+        fs::write(&policy_path, policy_bytes).expect("write policy fixture");
+
+        let mut cert_value: serde_json::Value =
+            serde_json::from_str(CERTIFICATE_FIXTURE).expect("fixture parse");
+        cert_value["policy"] = json!({
+            "schema_version": "agent_swarm-policy-v1",
+            "policy_hash": hash_certificate_bytes(policy_bytes),
+            "policy_ref": "local://runs/run-1/policy.json",
+            "policy_generated_at": "2026-02-28T12:00:20Z"
+        });
+        let cert_bytes = serde_json::to_vec_pretty(&cert_value).expect("serialize cert");
+        fs::write(&cert_path, &cert_bytes).expect("write cert with policy");
+        let expected_hash = hash_certificate_bytes(&cert_bytes);
+
+        let cert = verify_certificate_file_with_policy(
+            &cert_path,
+            &expected_hash,
+            "0123456789abcdef0123456789abcdef01234567",
+            Some(&policy_path),
+            true,
+        )
+        .expect("matching policy file should verify");
+        assert!(cert.policy.is_some());
     }
 
     #[test]

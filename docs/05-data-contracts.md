@@ -61,9 +61,20 @@ Date: 2026-02-28
     "started_at": "RFC3339",
     "finished_at": "RFC3339"
   },
+  "policy": {
+    "schema_version": "agent_swarm-policy-v1",
+    "policy_hash": "sha256(...)",
+    "policy_ref": "local://...|artifact://...",
+    "policy_generated_at": "RFC3339"
+  },
   "timestamp": "RFC3339"
 }
 ```
+
+Notes:
+- `policy` is optional for backward compatibility.
+- when present, verifier expects policy bytes and enforces `sha256(policy_bytes) == policy_hash`.
+- strict verifier mode can require policy presence (`--require-policy`).
 
 ## 3) Backend output artifacts
 
@@ -150,4 +161,5 @@ Security caveat (current implementation):
 1. Proof/public-input validity.
 2. Required commit pin equality.
 3. `sha256(certificate_bytes) == artifactHash`.
-4. Mode-specific required fields and replay identifiers.
+4. If certificate includes `policy`, require matching policy bytes hash.
+5. Mode-specific required fields and replay identifiers.

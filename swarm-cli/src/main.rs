@@ -13,7 +13,7 @@ use swarm_core::{
     validate_schema_value,
 };
 use swarm_state::LocalEngine;
-use swarm_verify::{verify_certificate_file, verify_proof_file};
+use swarm_verify::{verify_certificate_file_with_policy, verify_proof_file};
 
 const DEFAULT_AGENT_IMAGE: &str = "ghcr.io/example/swarm-agent:latest";
 const DEFAULT_AGENT_STEP: &str = "echo swarm m2 dispatch";
@@ -204,6 +204,10 @@ enum VerifyCmd {
         required_commit: String,
         #[arg(long)]
         attestation: Option<PathBuf>,
+        #[arg(long)]
+        policy_file: Option<PathBuf>,
+        #[arg(long)]
+        require_policy: bool,
     },
     Proof {
         #[arg(long)]
@@ -612,11 +616,15 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 expected_artifact_hash,
                 required_commit,
                 attestation,
+                policy_file,
+                require_policy,
             } => {
-                let cert = verify_certificate_file(
+                let cert = verify_certificate_file_with_policy(
                     &certificate,
                     &expected_artifact_hash,
                     &required_commit,
+                    policy_file.as_deref(),
+                    require_policy,
                 )
                 .map_err(|err| anyhow!("VERIFY_CERT_FAILED: {err}"))?;
                 Ok(success(
@@ -624,6 +632,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     json!({
                         "certificate_path": certificate,
                         "attestation": attestation,
+                        "policy_file": policy_file,
+                        "require_policy": require_policy,
                         "certificate": cert
                     }),
                 ))

@@ -31,7 +31,8 @@ This backlog translates `Main TODO` + `agent_swarm` planning notes into executab
 - [ ] (postponed) GitLab backend adapter with output parity tests.
   - Decision (2026-02-28): keep Phase 0/1 execution scope GitHub-only.
   - Revisit when Phase 2+ substrate expansion is activated.
-- [ ] Policy capsule hash field integration (optional, verifier-gated).
+- [x] Policy capsule hash field integration (optional, verifier-gated).
+- [x] Strict verifier policy mode (`--require-policy`) with regression coverage.
 - [ ] Marketplace command surface stubs (`market offer/buy/fulfill`) behind feature flags.
 - [ ] Optional attestation proof generation wrapper command.
 

@@ -4,13 +4,13 @@ This document describes the trust model of `swarm` based on the code as it exist
 
 Snapshot used for this review:
 - Date: 2026-02-28
-- Git commit: `0e6e83b0c2ac`
+- Git snapshot: working tree after M4 Phase 1 policy-capsule integration
 - Scope: current working tree implementation in `swarm-*` crates and active GitHub workflows
 
 ## Scope and Security Goal
 
 Primary goal today:
-- Let a CLI-driven multi-step run chain state across GitHub runs with capability ratcheting, artifact handoff, and basic local verification checks.
+- Let a CLI-driven multi-step run chain state across GitHub runs with capability ratcheting, artifact handoff, and local verification checks including optional policy-hash binding.
 
 What this system currently tries to prevent:
 - Running a different workflow commit than the caller pinned.
@@ -21,7 +21,7 @@ What this system currently tries to prevent:
 What this system does not yet cryptographically guarantee end-to-end:
 - Signed/attested capability tokens.
 - Full Sigstore/DSSE cryptographic attestation verification in `swarm-verify`.
-- On-chain or external trust anchor binding for policy capsules.
+- On-chain settlement enforcement of policy capsule binding.
 
 ## System Trust Boundaries (Current)
 
@@ -161,6 +161,10 @@ Certificate verification (`swarm-verify`):
   - File: `swarm-verify/src/lib.rs:75`
 - Validates certificate semantic fields and required commit extracted from `runtime.workflow_ref`.
   - File: `swarm-verify/src/lib.rs:112`, `swarm-verify/src/lib.rs:164`
+- Validates optional policy branch:
+  - if certificate includes `policy`, verifier requires policy bytes and checks `sha256(policy_bytes)` equals `policy.policy_hash`.
+  - strict mode can require policy metadata even when absent by default.
+  - File: `swarm-verify/src/lib.rs` (`verify_policy_binding`, `verify_certificate_file_with_policy`)
 
 Proof verification (`swarm-verify`):
 - Validates envelope structure and schema version.
@@ -169,8 +173,11 @@ Proof verification (`swarm-verify`):
   - File: `swarm-verify/src/lib.rs:201`
 
 CLI verify interface:
-- `verify cert` accepts optional `--attestation`, but current code does not perform attestation cryptographic verification in this path.
-  - File: `swarm-cli/src/main.rs:206`, `swarm-cli/src/main.rs:610`
+- `verify cert` supports:
+  - optional `--policy-file` for policy hash checks when policy metadata exists,
+  - `--require-policy` strict mode.
+- `verify cert` still accepts optional `--attestation`, but current code does not perform attestation cryptographic verification in this path.
+  - File: `swarm-cli/src/main.rs`
 
 Security effect:
 - You get byte-hash binding + commit equality checks when verifier is run.
@@ -238,7 +245,7 @@ Soft trust assumptions:
 
 Not currently trusted via strong crypto inside this repo:
 - Capability token issuer authenticity.
-- On-chain-attestable policy capsule hash linkage (M4 target, not current behavior).
+- On-chain policy settlement enforcement (Phase 2+ target, not current behavior).
 - Cryptographic validity of external zk proofs/attestations beyond envelope/hash checks.
 
 ## Guaranteed vs Not Guaranteed (Current)
@@ -250,12 +257,12 @@ Guaranteed by current code paths:
 - Fail-closed restore policy mismatch (`cold_start`) is rejected.
 - Mismatched ratchet keys fail encrypted checkpoint restore/decrypt operations.
 - Verifier can enforce certificate-hash equality + required commit match.
+- Verifier enforces policy hash equality when certificate includes policy metadata, with optional strict policy mode.
+- GitHub workflow emits `artifact_hash` from actual `certificate.json` bytes.
 
 Not guaranteed yet:
 - Signed/non-forgeable capability envelopes.
 - Automatic verifier gating in the GitHub collect path.
-- End-to-end certificate artifact hash realism in GitHub workflow output (current `artifact_hash` is placeholder derived from `run_id`).
-  - File: `.github/workflows/swarm-live-run.yml:244`
 - Full cryptographic proof verification for zk attestations in `swarm-verify`.
 - Transport-layer security for broker/provider path.
 
@@ -322,4 +329,3 @@ When auditing a run today, check in this order:
 4. If assurance needed, run verifier on certificate hash + required commit.
 5. For client-exit mode, verify ticket mode/expiry and broker/provider token match behavior.
 6. Treat all capability tokens as high-sensitivity bearer secrets.
-
