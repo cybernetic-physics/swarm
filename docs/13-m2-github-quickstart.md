@@ -6,6 +6,9 @@ Date: 2026-02-28
 For a tested live path (single GitHub runner) with concrete run IDs and findings, see:
 - `docs/15-live-github-e2e.md`
 - `docs/artifacts/2026-02-28-live-two-step-chain.json` (two-step encrypted chain evidence)
+- `docs/artifacts/2026-02-28-live-negative-key-mismatch.json` (wrong-key fail-closed evidence)
+- `docs/artifacts/2026-02-28-live-negative-reverse-key-mismatch.json` (reverse wrong-key fail-closed evidence)
+- `docs/05-data-contracts.md` section "Capability ratchet semantics" (expanded model and caveats)
 
 This quickstart covers the implemented M2 GitHub adapter path:
 - pinned workflow ref parsing and enforcement,

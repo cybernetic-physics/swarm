@@ -84,6 +84,109 @@ Machine-readable test record:
 
 - `docs/artifacts/2026-02-28-live-two-step-chain.json`
 
+## Negative test: wrong key for newer state (2026-02-28)
+
+Purpose:
+
+- Verify fail-closed behavior when using step-1 capability key material to restore step-2 encrypted checkpoint state.
+
+Executed mismatch input:
+
+- `checkpoint_in`: `gh-artifact://22521438644/state-bundle-live-chain2-1772284431` (from step 2)
+- `state_cap_in`: from step 1 (`state_cap_next`)
+- `net_cap_in`: from step 1 (`net_cap_next`)
+
+Observed run:
+
+- `run_id`: `live-neg-mismatch-1772284612`
+- GitHub run: `22521485655`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22521485655`
+- Workflow result: `completed/failure`
+- Failure step: `Restore encrypted prior bundle (optional)`
+- Failure marker in logs: `openssl ... bad decrypt`
+
+CLI collect behavior:
+
+- `swarm backend github collect` exited with code `4`.
+- Error code: `GH_COLLECT_FAILED`.
+- Reason: no valid artifacts to download (expected because workflow aborted before artifact emission).
+
+Conclusion:
+
+- Wrong key cannot decrypt newer encrypted state.
+- Ratchet enforcement is effective for this path.
+
+Machine-readable test record:
+
+- `docs/artifacts/2026-02-28-live-negative-key-mismatch.json`
+
+## Negative test: wrong newer key for older state (2026-02-28)
+
+Purpose:
+
+- Verify fail-closed behavior in the reverse direction: using step-2 capability key material to restore step-1 encrypted checkpoint state.
+
+Executed mismatch input:
+
+- `checkpoint_in`: `gh-artifact://22521431039/state-bundle-live-chain1-1772284401` (from step 1)
+- `state_cap_in`: from step 2 (`state_cap_next`)
+- `net_cap_in`: from step 2 (`net_cap_next`)
+
+Observed run:
+
+- `run_id`: `live-neg-reverse-1772284736`
+- GitHub run: `22521516075`
+- URL: `https://github.com/cybernetic-physics/swarm/actions/runs/22521516075`
+- Workflow result: `completed/failure`
+- Failure step: `Restore encrypted prior bundle (optional)`
+- Failure marker in logs: `openssl ... bad decrypt`
+
+CLI collect behavior:
+
+- `swarm backend github collect` exited with code `4`.
+- Error code: `GH_COLLECT_FAILED`.
+- Reason: no valid artifacts to download (workflow aborted before artifact emission).
+
+Conclusion:
+
+- Newer key cannot decrypt older encrypted state in this ratchet chain.
+- Both mismatch directions are now verified as fail-closed.
+
+Machine-readable test record:
+
+- `docs/artifacts/2026-02-28-live-negative-reverse-key-mismatch.json`
+
+## Direct Q/A verdict (2026-02-28)
+
+Question:
+
+- Does it work the other way: can key 2 open state 1?
+
+Answer:
+
+- No, that also fails.
+
+Live test details:
+
+- Input used:
+  - `checkpoint_in = gh-artifact://22521431039/state-bundle-live-chain1-1772284401` (state 1 bundle)
+  - `state_cap_in = step 2 state_cap_next` (key 2)
+  - `net_cap_in = step 2 net_cap_next`
+- Run:
+  - `run_id = live-neg-reverse-1772284736`
+  - GitHub run `22521516075`
+- Result:
+  - Workflow `completed/failure`
+  - Failed at `Restore encrypted prior bundle (optional)`
+  - Log marker: `openssl ... bad decrypt`
+  - `swarm backend github collect` failed with `GH_COLLECT_FAILED` (no artifacts)
+
+Ratchet conclusion:
+
+- `key 1 + state 2`: fails
+- `key 2 + state 1`: fails
+- This is the expected ratchet behavior.
+
 ## Preconditions
 
 - In repo root:

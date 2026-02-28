@@ -1,0 +1,30 @@
+{
+  "date": "2026-02-28",
+  "executed_at_utc": "2026-02-28T13:18:02Z",
+  "commit": "64d305bab68c0cc032cfb5b74c9278b337816c63",
+  "workflow_ref": "cybernetic-physics/swarm/.github/workflows/swarm-live-run.yml@64d305bab68c0cc032cfb5b74c9278b337816c63",
+  "negative_test": {
+    "description": "Use step-1 key material against step-2 encrypted checkpoint",
+    "run_id": "live-neg-mismatch-1772284612",
+    "gh_run_id": 22521485655,
+    "url": "https://github.com/cybernetic-physics/swarm/actions/runs/22521485655",
+    "checkpoint_in": "gh-artifact://22521438644/state-bundle-live-chain2-1772284431",
+    "state_cap_in_sha256": "bc095ef9f14b61a12c34c0476ac2f834edd74f3fead929f39f66a687bae7eb24",
+    "net_cap_in_sha256": "58b68362814ca934b0ba96022ef6b99223b561200ba71bb9e25e3e3c5a8c4eed",
+    "expected": "restore/decrypt fails; workflow aborts before emitting artifacts",
+    "observed": {
+      "workflow_status": "completed",
+      "workflow_conclusion": "failure",
+      "failed_step": "Restore encrypted prior bundle (optional)",
+      "failure_marker": "openssl bad decrypt",
+      "collect_exit_code": 4,
+      "collect_error_code": "GH_COLLECT_FAILED",
+      "collect_error_summary": "no valid artifacts found to download"
+    }
+  },
+  "assertions": {
+    "wrong_key_rejected": true,
+    "no_result_or_next_tokens_artifact_emitted": true,
+    "fail_closed_behavior_confirmed": true
+  }
+}
