@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cybernetic-physics.github.io/swarm/schemas/certificate.schema.json",
+  "title": "agent_swarm certificate v1",
+  "type": "object",
+  "required": [
+    "type",
+    "job_id",
+    "request_hash",
+    "mode",
+    "parent_state",
+    "result",
+    "runtime",
+    "timestamp"
+  ],
+  "properties": {
+    "type": { "const": "loom-agent-run-v1" },
+    "job_id": { "type": "string", "minLength": 1 },
+    "request_hash": { "type": "string", "pattern": "^sha256:.+" },
+    "mode": { "type": "string", "enum": ["prompt-run", "state-license"] },
+    "parent_state": {
+      "type": "object",
+      "required": ["state_id", "bundle_sha256", "ratchet_step"],
+      "properties": {
+        "state_id": { "type": "string", "minLength": 1 },
+        "bundle_sha256": { "type": "string", "pattern": "^sha256:.+" },
+        "ratchet_step": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
+    "result": {
+      "type": "object",
+      "required": ["response_sha256", "response_locator", "new_state"],
+      "properties": {
+        "response_sha256": { "type": "string", "pattern": "^sha256:.+" },
+        "response_locator": { "type": "string", "minLength": 1 },
+        "new_state": {
+          "type": "object",
+          "required": ["state_id", "bundle_sha256", "bundle_manifest_sha256"],
+          "properties": {
+            "state_id": { "type": "string", "minLength": 1 },
+            "bundle_sha256": { "type": "string", "pattern": "^sha256:.+" },
+            "bundle_manifest_sha256": { "type": "string", "pattern": "^sha256:.+" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["workflow_ref", "runner_class", "started_at", "finished_at"],
+      "properties": {
+        "workflow_ref": { "type": "string", "minLength": 1 },
+        "runner_class": { "type": "string", "minLength": 1 },
+        "started_at": { "type": "string", "minLength": 1 },
+        "finished_at": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "timestamp": { "type": "string", "minLength": 1 }
+  },
+  "additionalProperties": true
+}

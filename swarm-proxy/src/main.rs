@@ -6,7 +6,11 @@ use std::path::PathBuf;
 use swarm_proxy::{issue_ticket, run_broker, run_provider};
 
 #[derive(Parser, Debug)]
-#[command(name = "swarm-proxy", version, about = "Reverse proxy broker/provider for net_cap proxy mode")]
+#[command(
+    name = "swarm-proxy",
+    version,
+    about = "Reverse proxy broker/provider for net_cap proxy mode"
+)]
 struct Cli {
     /// Emit JSON output.
     #[arg(long)]

@@ -25,7 +25,11 @@ pub struct ProxyTicket {
     pub expires_at_unix: Option<u64>,
 }
 
-pub fn issue_ticket(session_id: &str, broker_addr: &str, expires_at_unix: Option<u64>) -> Result<ProxyTicket> {
+pub fn issue_ticket(
+    session_id: &str,
+    broker_addr: &str,
+    expires_at_unix: Option<u64>,
+) -> Result<ProxyTicket> {
     if session_id.trim().is_empty() {
         bail!("session_id must be non-empty");
     }
@@ -97,7 +101,7 @@ struct BrokerState {
     pending_data: Mutex<HashMap<String, mpsc::Sender<TcpStream>>>,
 }
 
-fn handle_broker_connection(mut stream: TcpStream, state: Arc<BrokerState>) -> Result<()> {
+fn handle_broker_connection(stream: TcpStream, state: Arc<BrokerState>) -> Result<()> {
     stream.set_nodelay(true).ok();
     let mut peek = [0u8; 16];
     let n = stream.peek(&mut peek)?;
@@ -221,7 +225,8 @@ fn handle_provider_data(mut stream: TcpStream, state: Arc<BrokerState>) -> Resul
     };
     stream.write_all(b"OK\n")?;
     stream.flush()?;
-    tx.send(stream).map_err(|_| anyhow!("pending data receiver dropped"))?;
+    tx.send(stream)
+        .map_err(|_| anyhow!("pending data receiver dropped"))?;
     Ok(())
 }
 
@@ -378,7 +383,8 @@ fn run_provider_once(broker_addr: &str, session_id: &str, token: &str) -> Result
                             let _ = copy_bidirectional(target_stream, data_stream);
                         }
                         Err(err) => {
-                            let failed = format!("FAILED {} failed-to-open-data-channel:{err}\n", nonce);
+                            let failed =
+                                format!("FAILED {} failed-to-open-data-channel:{err}\n", nonce);
                             control.write_all(failed.as_bytes())?;
                             control.flush()?;
                         }
@@ -400,8 +406,9 @@ fn connect_provider_data_channel(
     token: &str,
     nonce: &str,
 ) -> Result<TcpStream> {
-    let mut data = TcpStream::connect(broker_addr)
-        .with_context(|| format!("failed to connect provider data channel to broker {broker_addr}"))?;
+    let mut data = TcpStream::connect(broker_addr).with_context(|| {
+        format!("failed to connect provider data channel to broker {broker_addr}")
+    })?;
     data.set_nodelay(true).ok();
     let registration = format!("DATA {} {} {}\n", session_id, token, nonce);
     data.write_all(registration.as_bytes())?;
@@ -547,7 +554,8 @@ fn parse_proxy_auth(headers: &[(String, String)]) -> Result<(String, String)> {
     let decoded = STANDARD
         .decode(encoded)
         .map_err(|err| anyhow!("invalid Proxy-Authorization base64: {err}"))?;
-    let decoded_text = String::from_utf8(decoded).context("Proxy-Authorization contains non-UTF8 bytes")?;
+    let decoded_text =
+        String::from_utf8(decoded).context("Proxy-Authorization contains non-UTF8 bytes")?;
     let (session, token) = decoded_text
         .split_once(':')
         .ok_or_else(|| anyhow!("Proxy-Authorization payload must be session:token"))?;

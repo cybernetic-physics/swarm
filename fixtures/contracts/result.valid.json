@@ -1,0 +1,13 @@
+{
+  "run_id": "run-fixture-0001",
+  "status": "succeeded",
+  "operation": "launch",
+  "node_id": "node-child-0001",
+  "parent_node_id": "node-root-0001",
+  "state_id": "state-child-0001",
+  "restore_mode": "checkpoint",
+  "bundle_ref": "local://bundles/state-child-0001.tar",
+  "bundle_sha256": "sha256:bundle-child-hash",
+  "certificate_ref": "local://runs/run-fixture-0001/certificate.json",
+  "artifact_hash": "sha256:certificate-bytes-hash"
+}

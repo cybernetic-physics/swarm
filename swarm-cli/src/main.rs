@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use swarm_core::{Backend, RouteMode, RunSpec, validate_schema_kind};
+use swarm_core::{Backend, RouteMode, RunSpec, validate_schema_kind, validate_schema_value};
 use swarm_state::LocalEngine;
 use swarm_verify::verify_certificate_file;
 
@@ -735,12 +735,26 @@ fn execute(cli: Cli) -> Result<CliResult> {
         Commands::Schema { command } => match command {
             SchemaCmd::Validate { schema, file } => {
                 let schema_check = validate_schema_kind(&schema);
-                let file_exists = file.exists();
                 let mut errors = schema_check.errors.clone();
-                if !file_exists {
+                if !file.exists() {
                     errors.push(format!("file does not exist: {}", file.display()));
+                } else {
+                    match fs::read_to_string(&file) {
+                        Ok(contents) => match serde_json::from_str::<Value>(&contents) {
+                            Ok(value) => {
+                                let value_check = validate_schema_value(&schema, &value);
+                                errors.extend(value_check.errors);
+                            }
+                            Err(err) => {
+                                errors.push(format!("invalid JSON in {}: {err}", file.display()))
+                            }
+                        },
+                        Err(err) => {
+                            errors.push(format!("failed to read {}: {err}", file.display()))
+                        }
+                    }
                 }
-                let valid = schema_check.valid && file_exists;
+                let valid = schema_check.valid && errors.is_empty();
                 if !valid {
                     return Err(anyhow!(
                         "SCHEMA_VALIDATE_FAILED: schema={} file={} errors={}",
@@ -928,6 +942,7 @@ fn gh_policy(max_attempts: u32, timeout_secs: u64) -> github_backend::GhCommandP
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::fs;
     use tempfile::TempDir;
 
@@ -958,5 +973,71 @@ mod tests {
     fn net_cap_policy_violation_maps_to_policy_exit_code() {
         let err = anyhow!("NET_CAP_POLICY_VIOLATION: route policy mismatch");
         assert_eq!(classify_exit_code(&err), EXIT_POLICY_VIOLATION);
+    }
+
+    #[test]
+    fn schema_validate_rejects_invalid_json_payload() {
+        let tmp = TempDir::new().expect("temp dir");
+        let payload = tmp.path().join("bad.json");
+        fs::write(&payload, "{\"run_id\":\"x\"").expect("write malformed json");
+
+        let cli = Cli {
+            json: true,
+            quiet: false,
+            verbose: 0,
+            command: Commands::Schema {
+                command: SchemaCmd::Validate {
+                    schema: "result".to_string(),
+                    file: payload,
+                },
+            },
+        };
+
+        let err = execute(cli).expect_err("malformed JSON must fail schema validation");
+        assert!(err.to_string().contains("invalid JSON"));
+        assert_eq!(classify_exit_code(&err), EXIT_INVALID_INPUT);
+    }
+
+    #[test]
+    fn schema_validate_rejects_shape_mismatch_payload() {
+        let tmp = TempDir::new().expect("temp dir");
+        let payload = tmp.path().join("bad-shape.json");
+        fs::write(
+            &payload,
+            serde_json::to_vec_pretty(&json!({
+                "run_id": "run-fixture-1",
+                "status": "succeeded",
+                "operation": "launch",
+                "node_id": "node-1",
+                "parent_node_id": null,
+                "state_id": "state-1",
+                "restore_mode": "checkpoint",
+                "bundle_ref": "local://bundle",
+                "bundle_sha256": "sha256:abcd",
+                "certificate_ref": "",
+                "artifact_hash": "sha256:ef01"
+            }))
+            .expect("serialize"),
+        )
+        .expect("write payload");
+
+        let cli = Cli {
+            json: true,
+            quiet: false,
+            verbose: 0,
+            command: Commands::Schema {
+                command: SchemaCmd::Validate {
+                    schema: "result".to_string(),
+                    file: payload,
+                },
+            },
+        };
+
+        let err = execute(cli).expect_err("shape mismatch must fail schema validation");
+        assert!(
+            err.to_string()
+                .contains("certificate_ref must be a non-empty string")
+        );
+        assert_eq!(classify_exit_code(&err), EXIT_INVALID_INPUT);
     }
 }

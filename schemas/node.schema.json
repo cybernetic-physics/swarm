@@ -1,0 +1,91 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cybernetic-physics.github.io/swarm/schemas/node.schema.json",
+  "title": "agent_swarm node v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "node_id",
+    "parent_node_id",
+    "created_at",
+    "workspace",
+    "state_db",
+    "runtime",
+    "network",
+    "tags"
+  ],
+  "properties": {
+    "schema_version": { "const": "agent_swarm-node-v1" },
+    "node_id": { "type": "string", "minLength": 1 },
+    "parent_node_id": { "type": ["string", "null"] },
+    "created_at": { "type": "string", "minLength": 1 },
+    "workspace": {
+      "type": "object",
+      "required": ["mode", "artifact_hash", "artifact_ref"],
+      "properties": {
+        "mode": { "type": "string", "enum": ["snapshot", "delta"] },
+        "artifact_hash": { "type": "string", "pattern": "^sha256:.+" },
+        "artifact_ref": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": true
+    },
+    "state_db": {
+      "type": "object",
+      "required": ["snapshot_hash", "snapshot_ref", "ratchet_step", "state_id", "engine"],
+      "properties": {
+        "snapshot_hash": { "type": "string", "pattern": "^sha256:.+" },
+        "snapshot_ref": { "type": "string", "minLength": 1 },
+        "ratchet_step": { "type": "integer", "minimum": 0 },
+        "state_id": { "type": "string", "minLength": 1 },
+        "engine": {
+          "type": "object",
+          "required": ["kind", "schema_version"],
+          "properties": {
+            "kind": { "const": "sqlite-serialized" },
+            "schema_version": { "const": "loom-state-v1" }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "runtime": {
+      "type": "object",
+      "required": ["checkpoint_supported", "restore_compat"],
+      "properties": {
+        "checkpoint_supported": { "type": "boolean" },
+        "restore_compat": {
+          "type": "object",
+          "required": ["substrate"],
+          "properties": {
+            "substrate": { "type": "string", "minLength": 1 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "network": {
+      "type": "object",
+      "required": ["route_mode", "token"],
+      "properties": {
+        "route_mode": { "type": "string", "enum": ["direct", "client_exit"] },
+        "token": {
+          "type": "object",
+          "required": ["token_ref", "ratchet_step"],
+          "properties": {
+            "token_ref": { "type": "string", "minLength": 1 },
+            "ratchet_step": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": true
+        }
+      },
+      "additionalProperties": true
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}

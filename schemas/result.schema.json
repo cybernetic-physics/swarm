@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cybernetic-physics.github.io/swarm/schemas/result.schema.json",
+  "title": "agent_swarm result v1",
+  "type": "object",
+  "required": [
+    "run_id",
+    "status",
+    "operation",
+    "node_id",
+    "parent_node_id",
+    "state_id",
+    "restore_mode",
+    "bundle_ref",
+    "bundle_sha256",
+    "certificate_ref",
+    "artifact_hash"
+  ],
+  "properties": {
+    "run_id": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "minLength": 1 },
+    "operation": { "type": "string", "minLength": 1 },
+    "node_id": { "type": "string", "minLength": 1 },
+    "parent_node_id": { "type": ["string", "null"] },
+    "state_id": { "type": "string", "minLength": 1 },
+    "restore_mode": { "type": "string", "enum": ["checkpoint", "cold_start"] },
+    "bundle_ref": { "type": "string", "minLength": 1 },
+    "bundle_sha256": { "type": "string", "pattern": "^sha256:.+" },
+    "certificate_ref": { "type": "string", "minLength": 1 },
+    "artifact_hash": { "type": "string", "pattern": "^sha256:.+" }
+  },
+  "additionalProperties": true
+}

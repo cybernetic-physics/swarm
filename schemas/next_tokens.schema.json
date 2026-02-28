@@ -1,0 +1,14 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cybernetic-physics.github.io/swarm/schemas/next_tokens.schema.json",
+  "title": "agent_swarm next_tokens v1",
+  "type": "object",
+  "required": ["state_cap_next", "net_cap_next", "state_id_next", "ratchet_step"],
+  "properties": {
+    "state_cap_next": { "type": "string", "minLength": 1 },
+    "net_cap_next": { "type": "string", "minLength": 1 },
+    "state_id_next": { "type": "string", "minLength": 1 },
+    "ratchet_step": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}

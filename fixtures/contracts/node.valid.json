@@ -1,0 +1,40 @@
+{
+  "schema_version": "agent_swarm-node-v1",
+  "node_id": "node-root-0001",
+  "parent_node_id": null,
+  "created_at": "2026-02-28T12:00:00Z",
+  "workspace": {
+    "mode": "snapshot",
+    "artifact_hash": "sha256:workspace-root-hash",
+    "artifact_ref": "local://workspace/root"
+  },
+  "state_db": {
+    "snapshot_hash": "sha256:snapshot-root-hash",
+    "snapshot_ref": "local://states/root.snapshot",
+    "ratchet_step": 1,
+    "state_id": "state-root-0001",
+    "engine": {
+      "kind": "sqlite-serialized",
+      "schema_version": "loom-state-v1"
+    }
+  },
+  "runtime": {
+    "checkpoint_supported": true,
+    "checkpoint_hash": "sha256:checkpoint-root-hash",
+    "checkpoint_ref": "local://checkpoints/root",
+    "restore_compat": {
+      "substrate": "local",
+      "image_digest": "sha256:image-root",
+      "kernel": "linux"
+    }
+  },
+  "network": {
+    "route_mode": "direct",
+    "token": {
+      "token_ref": "secret://net_cap/root",
+      "ratchet_step": 1,
+      "expires_at": null
+    }
+  },
+  "tags": ["root", "fixture"]
+}
