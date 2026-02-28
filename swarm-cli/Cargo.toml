@@ -16,3 +16,6 @@ serde_json.workspace = true
 swarm-core = { path = "../swarm-core" }
 swarm-state = { path = "../swarm-state" }
 swarm-verify = { path = "../swarm-verify" }
+
+[dev-dependencies]
+tempfile.workspace = true

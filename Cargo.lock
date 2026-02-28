@@ -664,6 +664,7 @@ dependencies = [
  "swarm-core",
  "swarm-state",
  "swarm-verify",
+ "tempfile",
 ]
 
 [[package]]

@@ -1,0 +1,112 @@
+# M2 quickstart (GitHub backend)
+
+Status: current scaffold
+Date: 2026-02-28
+
+This quickstart covers the implemented M2 GitHub adapter path:
+- pinned workflow ref parsing and enforcement,
+- workflow dispatch via GitHub CLI (`gh api`),
+- run ledger tracking under `.swarm/github/runs`,
+- collection workflow via `gh run download`,
+- restore-mode compatibility policy checks (`checkpoint` vs `cold_start`).
+
+Run from:
+
+```bash
+cd /Users/cuboniks/Projects/agent_swarm/swarm
+```
+
+## Prerequisites
+
+- GitHub CLI installed and authenticated:
+
+```bash
+gh auth status
+```
+
+- A workflow reference pinned to an immutable commit:
+
+```text
+owner/repo/.github/workflows/loom-paid-run.yml@<40-hex-commit>
+```
+
+## 1) Dispatch (dry run first)
+
+```bash
+cargo run -p swarm-cli -- run launch \
+  --backend github \
+  --node root \
+  --run-id m2-github-launch \
+  --workflow-ref owner/repo/.github/workflows/loom-paid-run.yml@1234567890abcdef1234567890abcdef12345678 \
+  --allow-cold-start \
+  --dry-run \
+  --json
+```
+
+Dry-run output includes `command_preview` and writes:
+
+```text
+.swarm/github/runs/m2-github-launch.json
+```
+
+## 2) Dispatch (live)
+
+Remove `--dry-run` to perform real dispatch:
+
+```bash
+cargo run -p swarm-cli -- backend github dispatch \
+  --run-id m2-github-launch \
+  --workflow-ref owner/repo/.github/workflows/loom-paid-run.yml@1234567890abcdef1234567890abcdef12345678 \
+  --allow-cold-start \
+  --json
+```
+
+## 3) Collect artifacts for a known GitHub run id
+
+```bash
+cargo run -p swarm-cli -- backend github collect \
+  --run-id m2-github-launch \
+  --gh-run-id <GH_RUN_ID> \
+  --workflow-ref owner/repo/.github/workflows/loom-paid-run.yml@1234567890abcdef1234567890abcdef12345678 \
+  --json
+```
+
+Collection downloads artifacts and looks for:
+- `result.json`
+- `next_tokens.json`
+
+When found, it copies them to local contract paths:
+
+```text
+.swarm/local/runs/<run_id>/result.json
+.swarm/local/runs/<run_id>/next_tokens.json
+```
+
+## 4) Status and logs
+
+```bash
+cargo run -p swarm-cli -- run status --run-id m2-github-launch --json
+cargo run -p swarm-cli -- run logs --run-id m2-github-launch --json
+```
+
+## Compatibility policy behavior
+
+Dispatch records fallback policy in ledger:
+- `allow_cold_start` when `--allow-cold-start` is set.
+- `fail_closed` otherwise.
+
+During collect:
+- if `result.json` reports `restore_mode = cold_start` and policy is `fail_closed`, compatibility check fails.
+
+## Strict pin enforcement
+
+Unpinned refs are rejected:
+
+```bash
+cargo run -p swarm-cli -- backend github dispatch \
+  --run-id bad-pin \
+  --workflow-ref owner/repo/.github/workflows/loom-paid-run.yml@main \
+  --dry-run
+```
+
+Expected result: error requiring a `40-hex` commit SHA.

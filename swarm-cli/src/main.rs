@@ -1,3 +1,5 @@
+mod github_backend;
+
 use anyhow::{Result, anyhow};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use serde::{Deserialize, Serialize};
@@ -8,6 +10,9 @@ use std::path::{Path, PathBuf};
 use swarm_core::{Backend, RouteMode, RunSpec, validate_schema_kind};
 use swarm_state::LocalEngine;
 use swarm_verify::verify_certificate_file;
+
+const DEFAULT_AGENT_IMAGE: &str = "ghcr.io/example/swarm-agent:latest";
+const DEFAULT_AGENT_STEP: &str = "echo swarm m2 dispatch";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -87,6 +92,12 @@ enum RunCmd {
         workflow_ref: Option<String>,
         #[arg(long)]
         allow_cold_start: bool,
+        #[arg(long)]
+        agent_image: Option<String>,
+        #[arg(long)]
+        agent_step: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
     },
     Resume {
         #[arg(long)]
@@ -96,7 +107,15 @@ enum RunCmd {
         #[arg(long, value_enum)]
         backend: BackendArg,
         #[arg(long)]
+        workflow_ref: Option<String>,
+        #[arg(long)]
         allow_cold_start: bool,
+        #[arg(long)]
+        agent_image: Option<String>,
+        #[arg(long)]
+        agent_step: Option<String>,
+        #[arg(long)]
+        dry_run: bool,
     },
     Fork {
         #[arg(long)]
@@ -167,10 +186,28 @@ enum GithubBackendCmd {
         run_id: String,
         #[arg(long)]
         workflow_ref: String,
+        #[arg(long, value_enum, default_value_t = RouteModeArg::Direct)]
+        route_mode: RouteModeArg,
+        #[arg(long)]
+        allow_cold_start: bool,
+        #[arg(long, default_value = DEFAULT_AGENT_IMAGE)]
+        agent_image: String,
+        #[arg(long, default_value = DEFAULT_AGENT_STEP)]
+        agent_step: String,
+        #[arg(long)]
+        dry_run: bool,
     },
     Collect {
         #[arg(long)]
         run_id: String,
+        #[arg(long)]
+        gh_run_id: u64,
+        #[arg(long)]
+        workflow_ref: Option<String>,
+        #[arg(long)]
+        out_dir: Option<PathBuf>,
+        #[arg(long)]
+        dry_run: bool,
     },
 }
 
@@ -299,8 +336,13 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 route_mode,
                 workflow_ref,
                 allow_cold_start,
+                agent_image,
+                agent_step,
+                dry_run,
             } => {
                 let backend_core = to_backend(backend);
+                let workflow_ref =
+                    workflow_ref.or_else(|| load_config().ok().and_then(|c| c.workflow_ref));
                 let spec = RunSpec {
                     run_id: run_id.unwrap_or_else(|| format!("run-{}", sanitize(&node))),
                     node,
@@ -317,24 +359,45 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     ));
                 }
 
+                if matches!(backend_core, Backend::Github) {
+                    let dispatched = github_backend::dispatch_run(
+                        &cwd()?,
+                        &spec,
+                        allow_cold_start,
+                        agent_image.as_deref().unwrap_or(DEFAULT_AGENT_IMAGE),
+                        agent_step.as_deref().unwrap_or(DEFAULT_AGENT_STEP),
+                        dry_run,
+                    )?;
+                    return Ok(success(
+                        "github launch dispatch prepared",
+                        serde_json::to_value(dispatched)?,
+                    ));
+                }
+
                 Ok(success(
-                    "non-local launch scaffold",
-                    json!({ "run_spec": spec, "note": "GitHub/GitLab execution lands in M2/M5" }),
+                    "gitlab launch scaffold",
+                    json!({ "run_spec": spec, "note": "GitLab execution lands in M5" }),
                 ))
             }
             RunCmd::Resume {
                 node,
                 run_id,
                 backend,
+                workflow_ref,
                 allow_cold_start,
+                agent_image,
+                agent_step,
+                dry_run,
             } => {
                 let backend_core = to_backend(backend);
+                let workflow_ref =
+                    workflow_ref.or_else(|| load_config().ok().and_then(|c| c.workflow_ref));
                 let spec = RunSpec {
                     run_id: run_id.unwrap_or_else(|| format!("resume-{}", sanitize(&node))),
                     node,
                     backend: backend_core.clone(),
                     route_mode: RouteMode::Direct,
-                    workflow_ref: load_config().ok().and_then(|cfg| cfg.workflow_ref),
+                    workflow_ref,
                 };
 
                 if matches!(backend_core, Backend::Local) {
@@ -345,9 +408,24 @@ fn execute(cli: Cli) -> Result<CliResult> {
                     ));
                 }
 
+                if matches!(backend_core, Backend::Github) {
+                    let dispatched = github_backend::dispatch_run(
+                        &cwd()?,
+                        &spec,
+                        allow_cold_start,
+                        agent_image.as_deref().unwrap_or(DEFAULT_AGENT_IMAGE),
+                        agent_step.as_deref().unwrap_or(DEFAULT_AGENT_STEP),
+                        dry_run,
+                    )?;
+                    return Ok(success(
+                        "github resume dispatch prepared",
+                        serde_json::to_value(dispatched)?,
+                    ));
+                }
+
                 Ok(success(
-                    "non-local resume scaffold",
-                    json!({ "run_spec": spec, "note": "GitHub/GitLab execution lands in M2/M5" }),
+                    "gitlab resume scaffold",
+                    json!({ "run_spec": spec, "note": "GitLab execution lands in M5" }),
                 ))
             }
             RunCmd::Fork { node, label } => {
@@ -358,14 +436,19 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 ))
             }
             RunCmd::Status { run_id } => {
-                let result = local_engine()?.load_run_result(&run_id)?;
-                Ok(success("local run status loaded", result))
+                if let Ok(result) = local_engine()?.load_run_result(&run_id) {
+                    return Ok(success("local run status loaded", result));
+                }
+
+                let result = github_backend::load_github_run_status(&cwd()?, &run_id)?;
+                Ok(success("github run status loaded", result))
             }
             RunCmd::Logs { run_id, follow } => {
-                let hint = local_engine()?.logs_hint(&run_id);
+                let local_hint = local_engine()?.logs_hint(&run_id);
+                let github_hint = github_backend::logs_hint(&cwd()?, &run_id);
                 Ok(success(
-                    "local log hints",
-                    json!({ "follow": follow, "paths": hint }),
+                    "log hints",
+                    json!({ "follow": follow, "local": local_hint, "github": github_hint }),
                 ))
             }
         },
@@ -416,14 +499,52 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 GithubBackendCmd::Dispatch {
                     run_id,
                     workflow_ref,
-                } => Ok(success(
-                    "github dispatch scaffold",
-                    json!({ "run_id": run_id, "workflow_ref": workflow_ref }),
-                )),
-                GithubBackendCmd::Collect { run_id } => Ok(success(
-                    "github collect scaffold",
-                    json!({ "run_id": run_id, "artifacts": ["result.json", "next_tokens.json"] }),
-                )),
+                    route_mode,
+                    allow_cold_start,
+                    agent_image,
+                    agent_step,
+                    dry_run,
+                } => {
+                    let spec = RunSpec {
+                        run_id,
+                        node: "root".to_string(),
+                        backend: Backend::Github,
+                        route_mode: to_route_mode(route_mode),
+                        workflow_ref: Some(workflow_ref),
+                    };
+                    let dispatched = github_backend::dispatch_run(
+                        &cwd()?,
+                        &spec,
+                        allow_cold_start,
+                        &agent_image,
+                        &agent_step,
+                        dry_run,
+                    )?;
+                    Ok(success(
+                        "github dispatch handled",
+                        serde_json::to_value(dispatched)?,
+                    ))
+                }
+                GithubBackendCmd::Collect {
+                    run_id,
+                    gh_run_id,
+                    workflow_ref,
+                    out_dir,
+                    dry_run,
+                } => {
+                    let collected = github_backend::collect_run(
+                        &cwd()?,
+                        &run_id,
+                        gh_run_id,
+                        workflow_ref.as_deref(),
+                        out_dir.as_deref(),
+                        dry_run,
+                    )?;
+                    Ok(success(
+                        "github collect handled",
+                        serde_json::to_value(collected)?,
+                    ))
+                }
             },
             BackendCmd::Local { command } => match command {
                 LocalBackendCmd::Execute { node, run_id } => {
@@ -477,7 +598,8 @@ fn execute(cli: Cli) -> Result<CliResult> {
                         "01-notes-synthesis.md",
                         "03-cli-spec.md",
                         "07-roadmap.md",
-                        "10-implementation-backlog.md"
+                        "10-implementation-backlog.md",
+                        "12-m1-quickstart.md"
                     ]
                 }),
             )),
@@ -513,6 +635,10 @@ fn config_path() -> Result<PathBuf> {
 fn local_engine() -> Result<LocalEngine> {
     let cwd = std::env::current_dir()?;
     Ok(LocalEngine::new(cwd.join(".swarm").join("local")))
+}
+
+fn cwd() -> Result<PathBuf> {
+    Ok(std::env::current_dir()?)
 }
 
 fn load_config() -> Result<SwarmConfig> {

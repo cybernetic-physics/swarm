@@ -1,6 +1,6 @@
 # swarm
 
-Status: planning + M1 local backend scaffold implemented
+Status: planning + M1 local backend + M2 GitHub adapter scaffold
 Last updated: 2026-02-28
 
 `swarm` is the new CLI-first project under `/Users/cuboniks/Projects/agent_swarm/swarm`.
@@ -21,9 +21,15 @@ Implemented now:
   - deterministic local tar bundle generation,
   - run status + state inspect,
   - certificate hash/commit verification command.
+- M2 GitHub adapter scaffold:
+  - strict pinned workflow ref enforcement (`@<40-hex-commit>`),
+  - workflow dispatch path via `gh api`,
+  - collection path via `gh run download`,
+  - `.swarm/github` run ledger,
+  - restore fallback compatibility check on collected result artifacts.
 
 Not implemented yet:
-- M2 GitHub backend dispatch/collect + attested worker execution.
+- Full M2 production hardening (run-id to GH run correlation automation, artifact schema guards, retries/timeout policy).
 - M3 `net_cap` proxy mode.
 - M5 GitLab parity backend.
 
@@ -41,11 +47,12 @@ Not implemented yet:
 - `docs/10-implementation-backlog.md`: prioritized worklist for execution.
 - `docs/11-open-questions.md`: decision register for unresolved architecture choices.
 - `docs/12-m1-quickstart.md`: commands to use the implemented local backend path.
+- `docs/13-m2-github-quickstart.md`: commands to use the implemented GitHub dispatch/collect path.
 
 ## First implementation target
 
 Phase 0/1 only:
-- GitHub backend only (target for M2).
+- GitHub backend path.
 - Off-chain verifier flow.
 - Proxy-first `net_cap` (target for M3).
 - Deterministic `certificate.json` + encrypted bundle outputs.
