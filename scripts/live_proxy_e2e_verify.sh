@@ -110,7 +110,8 @@ COLLECT_JSON="${TMP_DIR}/collect.json"
 cargo run -q -p swarm-cli -- --json backend github dispatch \
   --run-id "$RUN_ID" \
   --workflow-ref "$WORKFLOW_REF" \
-  --route-mode client-exit > "$DISPATCH_JSON"
+  --route-mode client-exit \
+  --allow-direct-fallback > "$DISPATCH_JSON"
 
 GH_RUN_ID="$(wait_for_run_id "$DISPATCH_START" "")"
 echo "[2/4] Watch GitHub run: ${GH_RUN_ID}"
