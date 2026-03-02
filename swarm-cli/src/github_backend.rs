@@ -132,6 +132,7 @@ struct DispatchInputOverrides {
     checkpoint_in: Option<String>,
     state_cap_in: Option<String>,
     net_cap_in: Option<String>,
+    route_mode: Option<String>,
 }
 
 impl DispatchInputOverrides {
@@ -140,6 +141,7 @@ impl DispatchInputOverrides {
             checkpoint_in: dispatch_input_override("SWARM_CHECKPOINT_IN"),
             state_cap_in: dispatch_input_override("SWARM_STATE_CAP_IN"),
             net_cap_in: dispatch_input_override("SWARM_NET_CAP_IN"),
+            route_mode: None,
         }
     }
 }
@@ -345,6 +347,11 @@ pub fn dispatch_run_with_policy(
     dry_run: bool,
     policy: &GhCommandPolicy,
 ) -> Result<DispatchResult> {
+    let mut dispatch_inputs = DispatchInputOverrides::from_env();
+    let rm = route_mode_str(&spec.route_mode);
+    if rm != "direct" {
+        dispatch_inputs.route_mode = Some(rm.to_string());
+    }
     let options = DispatchOptions {
         allow_cold_start,
         agent_image,
@@ -352,7 +359,7 @@ pub fn dispatch_run_with_policy(
         dry_run,
         policy,
         gh_binary: Path::new("gh"),
-        dispatch_inputs: DispatchInputOverrides::from_env(),
+        dispatch_inputs,
     };
     dispatch_run_internal(cwd, spec, &options)
 }
@@ -424,6 +431,11 @@ fn dispatch_run_internal(
     if let Some(value) = options.dispatch_inputs.net_cap_in.as_deref() {
         cmd.push("-f".to_string());
         cmd.push(format!("inputs[net_cap_in]={value}"));
+    }
+
+    if let Some(value) = options.dispatch_inputs.route_mode.as_deref() {
+        cmd.push("-f".to_string());
+        cmd.push(format!("inputs[route_mode]={value}"));
     }
 
     let attempts_used = if options.dry_run {
@@ -1512,6 +1524,7 @@ mod tests {
                 checkpoint_in: Some("gh-artifact://12345/state-bundle-run".to_string()),
                 state_cap_in: Some("state-cap-token".to_string()),
                 net_cap_in: Some("net-cap-token".to_string()),
+                route_mode: None,
             },
         };
 

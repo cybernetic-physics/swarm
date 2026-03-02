@@ -46,6 +46,11 @@ on:
         required: false
         default: ""
         type: string
+      route_mode:
+        description: "Network route mode: direct or client_exit"
+        required: false
+        default: "direct"
+        type: string
 
 jobs:
   live-run:
@@ -208,6 +213,101 @@ jobs:
 
           tar -xf state_bundle.tar -C workspace_state
 
+      - name: Checkout repo (proxy mode)
+        if: inputs.route_mode == 'client_exit'
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (proxy mode)
+        if: inputs.route_mode == 'client_exit'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build (proxy mode)
+        if: inputs.route_mode == 'client_exit'
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build and validate proxy tunnel (proxy mode)
+        if: inputs.route_mode == 'client_exit'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo build -p swarm-proxy --release
+          BIN="target/release/swarm-proxy"
+
+          export BROKER_ADDR="127.0.0.1:18787"
+          export SESSION_ID="live-run-${{ inputs.request_id }}"
+          TARGET_PORT="19090"
+
+          TMP_ROOT="$(mktemp -d)"
+          EXPECTED_PAYLOAD="swarm-proxy-live-ok-${{ inputs.request_id }}"
+          echo "${EXPECTED_PAYLOAD}" > "${TMP_ROOT}/ping.txt"
+
+          cleanup() {
+            kill "${PROVIDER_PID:-}" "${BROKER_PID:-}" "${HTTP_PID:-}" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+
+          python3 -m http.server "${TARGET_PORT}" --bind 127.0.0.1 --directory "${TMP_ROOT}" >proxy_http.log 2>&1 &
+          HTTP_PID=$!
+
+          "${BIN}" broker --listen "${BROKER_ADDR}" >proxy_broker.log 2>&1 &
+          BROKER_PID=$!
+
+          TICKET_JSON="$("${BIN}" --json ticket --session-id "${SESSION_ID}" --broker "${BROKER_ADDR}")"
+          TOKEN="$(python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])' <<<"${TICKET_JSON}")"
+
+          "${BIN}" provider --broker "${BROKER_ADDR}" --session-id "${SESSION_ID}" --token "${TOKEN}" >proxy_provider.log 2>&1 &
+          PROVIDER_PID=$!
+
+          PROXIED_OK=false
+          for i in $(seq 1 30); do
+            if curl -fsS \
+              --proxy "http://${BROKER_ADDR}" \
+              --proxy-user "${SESSION_ID}:${TOKEN}" \
+              "http://127.0.0.1:${TARGET_PORT}/ping.txt" > proxied.txt 2>/dev/null; then
+              PROXIED_OK=true
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "${PROXIED_OK}" != "true" ]; then
+            echo "::error::Proxy tunnel validation failed — no successful proxied request"
+            exit 1
+          fi
+
+          diff -u <(echo "${EXPECTED_PAYLOAD}") proxied.txt
+
+          export CERT_HASH="$(sha256sum <<<"${TICKET_JSON}" | awk '{print $1}')"
+
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          evidence = {
+              "proxy_validated": True,
+              "route_mode": "client_exit",
+              "session_id": os.environ.get("SESSION_ID", ""),
+              "broker_addr": os.environ.get("BROKER_ADDR", ""),
+              "ticket_cert_hash": "sha256:" + os.environ.get("CERT_HASH", ""),
+              "payload_match": True,
+          }
+          Path("artifact/proxy_evidence.json").write_text(
+              json.dumps(evidence, indent=2) + "\n", encoding="utf-8"
+          )
+          PY
+
+          echo "Proxy tunnel validation passed"
+
+      - name: Upload proxy logs on failure
+        if: inputs.route_mode == 'client_exit' && failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-logs-${{ inputs.request_id }}
+          path: |
+            proxy_broker.log
+            proxy_provider.log
+            proxy_http.log
+
       - name: Execute step and create encrypted next bundle
         shell: bash
         run: |
@@ -249,6 +349,7 @@ jobs:
           export BUNDLE_REF="${bundle_ref}"
           export BUNDLE_HASH="${bundle_hash}"
           export EXPECTED_COMMIT_SHA="${{ inputs.expected_commit_sha }}"
+          export ROUTE_MODE="${{ inputs.route_mode }}"
 
           python3 - <<'PY'
           import hashlib
@@ -277,7 +378,7 @@ jobs:
               "schema_version": "agent_swarm-policy-v1",
               "policy_id": f"policy-{run_id}",
               "run_id": run_id,
-              "route_mode": "direct",
+              "route_mode": os.environ.get("ROUTE_MODE", "direct"),
               "source_backend": "artifact",
               "output_backend": "artifact",
               "workflow_ref": workflow_ref,
