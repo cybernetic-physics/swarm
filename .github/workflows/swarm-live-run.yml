@@ -216,6 +216,9 @@ jobs:
       - name: Checkout repo (proxy mode)
         if: inputs.route_mode == 'client_exit'
         uses: actions/checkout@v4
+        with:
+          path: _proxy_src
+          clean: false
 
       - name: Install Rust toolchain (proxy mode)
         if: inputs.route_mode == 'client_exit'
@@ -231,8 +234,10 @@ jobs:
         run: |
           set -euo pipefail
 
+          cd _proxy_src
           cargo build -p swarm-proxy --release
-          BIN="target/release/swarm-proxy"
+          BIN="${GITHUB_WORKSPACE}/_proxy_src/target/release/swarm-proxy"
+          cd "${GITHUB_WORKSPACE}"
 
           export BROKER_ADDR="127.0.0.1:18787"
           export SESSION_ID="live-run-${{ inputs.request_id }}"
