@@ -280,6 +280,8 @@ jobs:
 
           export CERT_HASH="$(sha256sum <<<"${TICKET_JSON}" | awk '{print $1}')"
 
+          mkdir -p artifact
+
           python3 - <<'PY'
           import json, os
           from pathlib import Path
