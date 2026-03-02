@@ -1,7 +1,7 @@
 # swarm
 
-Status: M0 schema/verifier freeze + M1 local backend + M2 GitHub adapter + M2b hardening + M3 fail-closed net_cap
-Last updated: 2026-02-28
+Status: M0 schema/verifier freeze + M1 local backend + M2 GitHub adapter + M2b hardening + M3 fail-closed net_cap + signer-first wallet CLI
+Last updated: 2026-03-02
 
 `swarm` is the new CLI-first project under `/Users/cuboniks/Projects/agent_swarm/swarm`.
 
@@ -42,6 +42,11 @@ Implemented now:
 - Capability envelope parser/serializer:
   - shared `state_cap`/`net_cap` envelope encode/decode and validation in `swarm-core`,
   - redacted capability summaries for log-safe CLI output paths.
+- Signer-first wallet module (Base Sepolia defaults):
+  - `wallet import private-key|mnemonic|keystore`,
+  - `wallet address`, `wallet balance`, and `wallet send`,
+  - keychain-backed secret storage with metadata-only registry in `~/.swarm/wallet_signers.json`,
+  - pluggable signer backend enum for local key/mnemonic/keystore types.
 
 Not implemented yet:
 - run-id to GH run correlation automation after dispatch.
@@ -64,6 +69,7 @@ Not implemented yet:
 - `docs/13-m2-github-quickstart.md`: commands to use the implemented GitHub dispatch/collect path.
 - `docs/14-m3-proxy-smoke-experiment.md`: experiment report with network diagrams, procedure, and results.
 - `docs/15-live-github-e2e.md`: runbook for real dispatch/collect testing with one GitHub runner.
+- `docs/19-wallet-signer-phase1.md`: detailed implementation guide for signer-first wallet commands, keychain storage model, and Base Sepolia defaults.
 
 ## First implementation target
 

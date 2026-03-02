@@ -19,6 +19,37 @@ swarm
   config show
   config set <key> <value>
 
+  wallet import private-key
+    --alias <name|default>
+    --private-key <hex> # optional; prompt if omitted
+    --set-default
+
+  wallet import mnemonic
+    --alias <name|default>
+    --mnemonic "<words>" # optional; prompt if omitted
+    --set-default
+
+  wallet import keystore
+    --alias <name|default>
+    --keystore <path>
+    --password <value> # optional; prompt if omitted
+    --set-default
+
+  wallet address
+    --alias <name|default>
+
+  wallet balance
+    --alias <name|default>
+    --rpc-url <url> # default https://sepolia.base.org
+    --chain-id <u64> # default 84532
+
+  wallet send
+    --alias <name|default>
+    --rpc-url <url> # default https://sepolia.base.org
+    --chain-id <u64> # default 84532
+    --to <0x...>
+    --value-wei <uint256>
+
   run launch
     --node <node_id|root>
     --backend <local|github>

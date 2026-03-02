@@ -1,5 +1,6 @@
 mod github_backend;
 mod net_cap;
+mod signer;
 
 use anyhow::{Result, anyhow};
 use clap::{ArgAction, Parser, Subcommand, ValueEnum};
@@ -57,6 +58,10 @@ enum Commands {
         #[command(subcommand)]
         command: ConfigCmd,
     },
+    Wallet {
+        #[command(subcommand)]
+        command: WalletCmd,
+    },
     Run {
         #[command(subcommand)]
         command: RunCmd,
@@ -87,6 +92,68 @@ enum Commands {
 enum ConfigCmd {
     Show,
     Set { key: String, value: String },
+}
+
+#[derive(Subcommand, Debug)]
+enum WalletCmd {
+    Import {
+        #[command(subcommand)]
+        command: WalletImportCmd,
+    },
+    Address {
+        #[arg(long)]
+        alias: Option<String>,
+    },
+    Balance {
+        #[arg(long)]
+        alias: Option<String>,
+        #[arg(long, default_value = signer::DEFAULT_BASE_SEPOLIA_RPC_URL)]
+        rpc_url: String,
+        #[arg(long, default_value_t = signer::DEFAULT_BASE_SEPOLIA_CHAIN_ID)]
+        chain_id: u64,
+    },
+    Send {
+        #[arg(long)]
+        alias: Option<String>,
+        #[arg(long, default_value = signer::DEFAULT_BASE_SEPOLIA_RPC_URL)]
+        rpc_url: String,
+        #[arg(long, default_value_t = signer::DEFAULT_BASE_SEPOLIA_CHAIN_ID)]
+        chain_id: u64,
+        #[arg(long)]
+        to: String,
+        #[arg(long)]
+        value_wei: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum WalletImportCmd {
+    PrivateKey {
+        #[arg(long)]
+        alias: Option<String>,
+        #[arg(long)]
+        private_key: Option<String>,
+        #[arg(long)]
+        set_default: bool,
+    },
+    Mnemonic {
+        #[arg(long)]
+        alias: Option<String>,
+        #[arg(long)]
+        mnemonic: Option<String>,
+        #[arg(long)]
+        set_default: bool,
+    },
+    Keystore {
+        #[arg(long)]
+        alias: Option<String>,
+        #[arg(long)]
+        keystore: PathBuf,
+        #[arg(long)]
+        password: Option<String>,
+        #[arg(long)]
+        set_default: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -412,6 +479,76 @@ fn execute(cli: Cli) -> Result<CliResult> {
                 }
                 save_config(&cfg)?;
                 Ok(success("config updated", serde_json::to_value(cfg)?))
+            }
+        },
+        Commands::Wallet { command } => match command {
+            WalletCmd::Import { command } => match command {
+                WalletImportCmd::PrivateKey {
+                    alias,
+                    private_key,
+                    set_default,
+                } => {
+                    let imported = signer::import_private_key(alias, private_key, set_default)?;
+                    Ok(success(
+                        "wallet private key imported",
+                        serde_json::to_value(imported)?,
+                    ))
+                }
+                WalletImportCmd::Mnemonic {
+                    alias,
+                    mnemonic,
+                    set_default,
+                } => {
+                    let imported = signer::import_mnemonic(alias, mnemonic, set_default)?;
+                    Ok(success(
+                        "wallet mnemonic imported",
+                        serde_json::to_value(imported)?,
+                    ))
+                }
+                WalletImportCmd::Keystore {
+                    alias,
+                    keystore,
+                    password,
+                    set_default,
+                } => {
+                    let imported =
+                        signer::import_keystore(alias, keystore.as_path(), password, set_default)?;
+                    Ok(success(
+                        "wallet keystore imported",
+                        serde_json::to_value(imported)?,
+                    ))
+                }
+            },
+            WalletCmd::Address { alias } => {
+                let address = signer::wallet_address(alias)?;
+                Ok(success(
+                    "wallet address loaded",
+                    serde_json::to_value(address)?,
+                ))
+            }
+            WalletCmd::Balance {
+                alias,
+                rpc_url,
+                chain_id,
+            } => {
+                let balance = signer::wallet_balance(alias, &rpc_url, chain_id)?;
+                Ok(success(
+                    "wallet balance loaded",
+                    serde_json::to_value(balance)?,
+                ))
+            }
+            WalletCmd::Send {
+                alias,
+                rpc_url,
+                chain_id,
+                to,
+                value_wei,
+            } => {
+                let sent = signer::wallet_send(alias, &rpc_url, chain_id, &to, &value_wei)?;
+                Ok(success(
+                    "wallet transaction submitted",
+                    serde_json::to_value(sent)?,
+                ))
             }
         },
         Commands::Run { command } => match command {
@@ -893,6 +1030,7 @@ fn classify_exit_code(err: &anyhow::Error) -> i32 {
         EXIT_POLICY_VIOLATION
     } else if msg.starts_with("SCHEMA_VALIDATE_FAILED:")
         || msg.starts_with("INVALID_STATE_CAP:")
+        || msg.starts_with("WALLET_")
         || msg.contains("unsupported key")
     {
         EXIT_INVALID_INPUT
@@ -1006,6 +1144,12 @@ mod tests {
     fn verify_proof_failure_maps_to_verification_exit_code() {
         let err = anyhow!("VERIFY_PROOF_FAILED: invalid proof");
         assert_eq!(classify_exit_code(&err), EXIT_VERIFICATION_FAILED);
+    }
+
+    #[test]
+    fn wallet_errors_map_to_invalid_input_exit_code() {
+        let err = anyhow!("WALLET_CHAIN_MISMATCH: expected chain id mismatch");
+        assert_eq!(classify_exit_code(&err), EXIT_INVALID_INPUT);
     }
 
     #[test]
